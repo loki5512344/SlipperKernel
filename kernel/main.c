@@ -22,6 +22,7 @@
 #include "spx.h"
 #include "proc.h"
 #include "syscall.h"
+#include "plic.h"
 
 extern char __bss_start[];
 extern char __bss_end[];
@@ -119,6 +120,21 @@ void kmain(u64 hartid, u64 fdt_addr)
     /* 4) Timer (CLINT). */
     timer_init();
 
+    /* 4b) PLIC — external interrupt controller. */
+    {
+        paddr_t plic_base;
+        fdt_find_plic(&plic_base);
+        plic_init(plic_base);
+        plic_set_priority(10, 1);   /* UART0              */
+        plic_set_priority(1, 1);    /* VirtIO (first)     */
+        plic_enable(10, 0);         /* UART0              */
+        plic_enable(1, 0);          /* VirtIO (first)     */
+        plic_set_threshold(0);
+    }
+
+    /* Enable supervisor external interrupts. */
+    csr_set(sie, (1 << 1) | (1 << 9));
+
     /* 5) Devices: virtio-blk. */
     fdt_mmio_t vdevs[4];
     int nv = fdt_find_virtio(vdevs, ARR_LEN(vdevs));
@@ -170,10 +186,21 @@ void kmain(u64 hartid, u64 fdt_addr)
     rc = spx_load(img, init_size, &entry, &user_root, &ustack);
     if (rc) kpanic("kmain: spx_load failed: %d", rc);
 
-    /* 9) Create process and drop to user mode. */
+    /* 9) Create processes. */
     proc_init();
     rc = proc_create_user(entry, ustack, user_root, PROC_PID_INIT);
-    if (rc) kpanic("kmain: proc_create_user: %d", rc);
+    if (rc) kpanic("kmain: proc_create_user pid 1: %d", rc);
+
+    /* Create a second process with the same binary to test scheduling. */
+    {
+        vaddr_t entry2;
+        paddr_t user_root2;
+        vaddr_t ustack2;
+        rc = spx_load(img, init_size, &entry2, &user_root2, &ustack2);
+        if (rc) kpanic("kmain: spx_load pid 2: %d", rc);
+        rc = proc_create_user(entry2, ustack2, user_root2, 2);
+        if (rc) kpanic("kmain: proc_create_user pid 2: %d", rc);
+    }
 
     /* Enable S-mode interrupts (for timer + syscalls). */
     csr_set(sstatus, SSTATUS_SIE);

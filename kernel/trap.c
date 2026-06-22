@@ -16,6 +16,7 @@
 #include "timer.h"
 #include "vmm.h"
 #include "proc.h"
+#include "plic.h"
 
 void trap_init(void)
 {
@@ -35,51 +36,67 @@ void trap_handler(trap_frame_t *f)
         switch (code) {
         case 5: /* S-timer */
             timer_handle();
-            return;
+            break;
         case 9: /* S-external (PLIC) */
-            /* TODO: PLIC handle */
-            kwrn("trap: external IRQ (unhandled), scause=0x%lx", cause);
-            return;
+            {
+                int irq = plic_claim();
+                if (irq) {
+                    kinf("trap: PLIC IRQ %d", irq);
+                    plic_complete(irq);
+                }
+            }
+            break;
         case 1: /* S-soft */
             kwrn("trap: soft IRQ (unhandled)");
-            return;
+            break;
         default:
             kwrn("trap: unknown IRQ scause=0x%lx", cause);
-            return;
+            break;
+        }
+    } else {
+        switch (code) {
+        case CAUSE_U_ECALL:
+            syscall_handler(f);
+            f->sepc += 4;
+            break;
+
+        case CAUSE_INST_PF:
+        case CAUSE_LD_PF:
+        case CAUSE_ST_PF:
+        case CAUSE_IAMISS:
+        case CAUSE_LDAMISS:
+        case CAUSE_STAMISS:
+            kerr("trap: page fault sepc=0x%lx stval=0x%lx code=%lu",
+                 f->sepc, csr_read(stval), code);
+            proc_exit(proc_current()->pid, (int)(code + 100));
+            break;
+
+        case CAUSE_ILL:
+            kerr("trap: illegal instruction sepc=0x%lx stval=0x%lx",
+                 f->sepc, csr_read(stval));
+            proc_exit(proc_current()->pid, 132);
+            break;
+
+        case CAUSE_BRK:
+            kerr("trap: breakpoint sepc=0x%lx", f->sepc);
+            proc_exit(proc_current()->pid, 133);
+            break;
+
+        default:
+            kpanic("trap: unhandled scause=0x%lx sepc=0x%lx stval=0x%lx",
+                   cause, f->sepc, csr_read(stval));
         }
     }
 
-    /* Synchronous exception. */
-    switch (code) {
-    case CAUSE_U_ECALL:
-        syscall_handler(f);
-        /* Advance past the ecall instruction. trap.S restores sepc from
-         * f->sepc on exit, so we update the frame rather than the CSR. */
-        f->sepc += 4;
-        return;
-
-    case CAUSE_INST_PF:
-    case CAUSE_LD_PF:
-    case CAUSE_ST_PF:
-    case CAUSE_IAMISS:
-    case CAUSE_LDAMISS:
-    case CAUSE_STAMISS:
-        /* In MVP: page faults from user-space are fatal to the process. */
-        kerr("trap: page fault sepc=0x%lx stval=0x%lx code=%lu",
-             f->sepc, csr_read(stval), code);
-        proc_exit(proc_current()->pid, (int)(code + 100));
-
-    case CAUSE_ILL:
-        kerr("trap: illegal instruction sepc=0x%lx stval=0x%lx",
-             f->sepc, csr_read(stval));
-        proc_exit(proc_current()->pid, 132);
-
-    case CAUSE_BRK:
-        kerr("trap: breakpoint sepc=0x%lx", f->sepc);
-        proc_exit(proc_current()->pid, 133);
-
-    default:
-        kpanic("trap: unhandled scause=0x%lx sepc=0x%lx stval=0x%lx",
-               cause, f->sepc, csr_read(stval));
+    /* Post-dispatch: reschedule if needed. */
+    if (proc_current()) {
+        if (unlikely(proc_current()->state == PROC_STATE_EXITED)) {
+            sched_yield(f);
+            khalt();
+        }
+        if (need_resched) {
+            need_resched = 0;
+            sched_yield(f);
+        }
     }
 }

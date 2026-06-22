@@ -66,7 +66,17 @@ int vfs_open(const char *path)
         f->used = 1;
         return fd;
     }
-    /* FAT32 path deferred. */
+    if (g_root_fs == VFS_FS_FAT32) {
+        u32 cluster, size;
+        int rc = fat32_lookup(name, &cluster, &size);
+        if (rc) return rc;
+        f->ino  = cluster;
+        f->size = size;
+        f->pos  = 0;
+        f->fs   = VFS_FS_FAT32;
+        f->used = 1;
+        return fd;
+    }
     return SL_ERR_NOSYS;
 }
 
@@ -77,6 +87,13 @@ int vfs_read(int fd, void *buf, usize len)
     if (!f->used) return SL_ERR_INVAL;
     if (f->fs == VFS_FS_SLIPPER) {
         int n = spfs_read(f->ino, buf, f->pos, (u32)len);
+        if (n > 0) f->pos += (u32)n;
+        return n;
+    }
+    if (f->fs == VFS_FS_FAT32) {
+        if (f->pos >= f->size) return 0;
+        u32 read_len = MIN((u32)len, f->size - f->pos);
+        int n = fat32_read(f->ino, buf, f->pos, read_len);
         if (n > 0) f->pos += (u32)n;
         return n;
     }

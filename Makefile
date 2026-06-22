@@ -41,6 +41,7 @@ C_SRC    := \
     drivers/uart.c    \
     drivers/virtio.c  \
     drivers/virtio_req.c \
+    drivers/plic.c \
     lib/fdt.c         \
     lib/fdt_find.c    \
     lib/string.c
@@ -90,10 +91,10 @@ $(BUILD)/mkimage: scripts/mkimage.c
 INIT_ELF := $(BUILD)/init.elf
 INIT_SPX := $(BUILD)/init.spx
 
-$(INIT_ELF): init/init.S init/init.ld
+$(INIT_ELF): init/init.c init/init.ld
 	@mkdir -p $(BUILD)
 	$(CC) $(ARCH) -ffreestanding -nostdlib -nostartfiles -static \
-	    -Wl,-T,init/init.ld -o $@ init/init.S
+	    -Wl,-T,init/init.ld -o $@ init/init.c
 	@echo "  [INIT] $@"
 
 $(INIT_SPX): $(INIT_ELF) $(BUILD)/elf2spx

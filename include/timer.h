@@ -12,4 +12,6 @@ void timer_handle(void);        /* called from trap_handler on S-timer interrupt
 u64  timer_uptime_us(void);
 u64  timer_now(void);           /* raw mtime */
 
+extern volatile u64 g_jiffies;
+
 #endif

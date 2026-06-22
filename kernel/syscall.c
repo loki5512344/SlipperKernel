@@ -47,13 +47,35 @@ static long sys_read(long fd, void *buf, usize len)
 {
     if (fd != 0) return SL_ERR_INVAL;
     if (!user_ptr_ok(buf, len)) return SL_ERR_PERM;
-    /* Non-blocking read from UART. Returns 0 if nothing ready (MVP). */
+    /* Line-discipline read from UART: echo, backspace, enter. */
     u8 *p = (u8 *)buf;
     usize got = 0;
-    for (usize i = 0; i < len; ++i) {
+    for (;;) {
         int c = uart_getc(&g_uart);
-        if (c < 0) break;
-        p[i] = (u8)c;
+        if (c < 0) {
+            if (got == 0) continue;
+            break;
+        }
+        if (c == '\r' || c == '\n') {
+            uart_putc(&g_uart, '\r');
+            uart_putc(&g_uart, '\n');
+            p[got] = '\n';
+            got++;
+            break;
+        }
+        if (c == 127 || c == '\b') {
+            if (got > 0) {
+                got--;
+                uart_putc(&g_uart, '\b');
+                uart_putc(&g_uart, ' ');
+                uart_putc(&g_uart, '\b');
+            }
+            continue;
+        }
+        if (c < 32) continue;
+        if (got >= len - 1) continue;
+        uart_putc(&g_uart, (char)c);
+        p[got] = (u8)c;
         got++;
     }
     return (long)got;
@@ -66,7 +88,7 @@ static long sys_exit(long code)
 
 static long sys_yield(void)
 {
-    /* Single-task MVP: nothing to switch to. */
+    need_resched = 1;
     return 0;
 }
 

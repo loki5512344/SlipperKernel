@@ -79,11 +79,15 @@ trap_entry:
     csrr    t0, sstatus
     sd      t0, 256(sp)
 
+    /* Save satp (user root) — needed for context switch. */
+    csrr    t0, satp
+    sd      t0, 280(sp)
+
     /* Call C handler. */
     mv      a0, sp
     call    trap_handler
 
-    /* ------------- Exit path --------------------
+    /* ------------- Exit path (trap_return) --------------------
      *
      * Goal: restore everything and sret back to U-mode with:
      *   sp    = user_sp   (from frame.sp)
@@ -92,8 +96,12 @@ trap_entry:
      * We restore all regs while the kernel page table is still active,
      * then switch to user satp, bump sscratch, and sret in a tight
      * sequence — no interrupt window where sscratch is stale.
+     *
+     * trap_return is also jumped to from sched_switch after a
+     * context switch — sp already points to the target's trap frame.
      */
-
+    .global trap_return
+trap_return:
     /* Restore all GPRs from the frame (kernel satp still active). */
     ld      ra,   0(sp)
     ld      gp,   16(sp)
@@ -141,9 +149,30 @@ trap_entry:
     addi    t1, sp, 288            /* t1 = kernel_sp */
     csrw    sscratch, t1
 
-    /* Restore user sp and return. */
-    ld      sp, 8(sp)              /* sp = user_sp */
+    /* Pre-load user sp from frame before switching satp. */
+    ld      t0, 8(sp)              /* t0 = user_sp */
+
+    /* Restore user satp (switch to user page table).
+     * This must happen after all kernel stack accesses. */
+    ld      t1, 280(sp)
+    csrw    satp, t1
+    sfence.vma zero, zero
+
+    /* Switch to user sp and return. */
+    mv      sp, t0
     sret
+
+/* sched_switch(new_sp) — called from C to perform a context switch.
+ *   a0 = new trap frame address (on the target process's kernel stack)
+ *
+ * Switches sp to the new trap frame, then jumps into trap_return to
+ * restore all registers and sret to the target process in U-mode.
+ * Never returns to the caller. */
+    .global sched_switch
+    .balign 4
+sched_switch:
+    mv      sp, a0
+    j       trap_return
 
 /* void drop_to_user(vaddr_t entry, vaddr_t ustack, paddr_t user_root_pa)
  *   a0 = entry, a1 = ustack, a2 = user root PA
@@ -169,6 +198,10 @@ drop_to_user:
     li      t1, (1 << 5) | (1 << 18)    /* SPIE | SUM */
     or      t0, t0, t1
     csrw    sstatus, t0
+
+    /* Enable supervisor soft (SSI) and external (SEI) interrupts. */
+    li      t0, (1 << 1) | (1 << 9)
+    csrs    sie, t0
 
     /* Install user root page table. satp = SV39 | (root_pa >> 12). */
     li      t0, (8UL << 60)

@@ -12,6 +12,7 @@
 #include "klog.h"
 #include "riscv.h"
 #include "fdt.h"
+#include "proc.h"
 
 #define CLINT_TIMER_HZ   100
 
@@ -19,6 +20,7 @@ static volatile u64 *g_mtime    = NULL;
 static volatile u64 *g_mtimecmp = NULL;
 static u64  g_tick_interval     = 0;
 static u64  g_uptime_ticks      = 0;
+volatile u64 g_jiffies          = 0;
 static paddr_t g_clint_base     = 0;
 
 static inline u64 read_mtime(void)
@@ -72,8 +74,10 @@ void timer_init(void)
 void timer_handle(void)
 {
     g_uptime_ticks++;
+    g_jiffies++;
     /* Re-arm. */
     write_mtimecmp(read_mtime() + g_tick_interval);
+    sched_tick();
 }
 
 u64 timer_now(void)
