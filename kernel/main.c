@@ -139,7 +139,6 @@ void kmain(u64 hartid, u64 fdt_addr)
     fdt_mmio_t vdevs[4];
     int nv = fdt_find_virtio(vdevs, ARR_LEN(vdevs));
     kinf("fdt: %d virtio,mmio node(s)", nv);
-    kinf("fdt: %d virtio,mmio node(s)", nv);
     int root_dev = -1;
     for (int i = 0; i < nv; ++i) {
         kinf("kmain: probing virtio @0x%lx", vdevs[i].base);
