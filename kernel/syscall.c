@@ -133,6 +133,24 @@ static long sys_stat(const char *path, void *st)
     return sz;
 }
 
+static long sys_exec(const char *path, trap_frame_t *f)
+{
+    if (!user_ptr_ok(path, 1)) return SL_ERR_PERM;
+    return proc_exec(path, f);
+}
+
+static long sys_sbrk(long increment)
+{
+    proc_t *p = proc_current();
+    if (!p) return SL_ERR_INVAL;
+    vaddr_t old = p->heap_brk;
+    vaddr_t new = old + (vaddr_t)increment;
+    vaddr_t heap_end = 0x3FF00000UL + 64 * 1024;
+    if (new < 0x3FF00000UL || new > heap_end) return SL_ERR_RANGE;
+    p->heap_brk = new;
+    return (long)old;
+}
+
 void syscall_handler(trap_frame_t *f)
 {
     long nr = (long)f->a7;
@@ -152,6 +170,8 @@ void syscall_handler(trap_frame_t *f)
     case SYS_close:    ret = sys_close(a0); break;
     case SYS_lseek:    ret = sys_lseek(a0, a1, a2); break;
     case SYS_stat:     ret = sys_stat((const char *)a0, (void *)a1); break;
+    case SYS_exec:     ret = sys_exec((const char *)a0, f); break;
+    case SYS_sbrk:     ret = sys_sbrk(a0); break;
     case SYS_brk:
     case SYS_mmap:
         /* Not implemented in MVP. */

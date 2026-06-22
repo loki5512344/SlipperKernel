@@ -56,9 +56,11 @@ _Static_assert(sizeof(spx_segment_t) == 40, "spx_segment size");
 _Static_assert(sizeof(spx_header_t) == 344, "spx_header size");
 
 /* Loads an .spx image from kernel memory into a fresh user address space.
- * Allocates root page table, maps all segments, allocates user stack.
- * Returns 0 / negative error. On success fills out_entry and out_root_pa. */
+ * Allocates root page table, maps all segments, allocates user stack + heap.
+ * Returns 0 / negative error. On success fills out_entry, out_root_pa,
+ * out_ustack, and out_heap_brk. */
 int spx_load(const void *image, usize image_size,
-             vaddr_t *out_entry, paddr_t *out_root_pa, vaddr_t *out_ustack);
+             vaddr_t *out_entry, paddr_t *out_root_pa, vaddr_t *out_ustack,
+             vaddr_t *out_heap_brk);
 
 #endif

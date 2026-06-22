@@ -182,12 +182,13 @@ void kmain(u64 hartid, u64 fdt_addr)
     vaddr_t entry;
     paddr_t user_root;
     vaddr_t ustack;
-    rc = spx_load(img, init_size, &entry, &user_root, &ustack);
+    vaddr_t heap_base;
+    rc = spx_load(img, init_size, &entry, &user_root, &ustack, &heap_base);
     if (rc) kpanic("kmain: spx_load failed: %d", rc);
 
     /* 9) Create processes. */
     proc_init();
-    rc = proc_create_user(entry, ustack, user_root, PROC_PID_INIT);
+    rc = proc_create_user(entry, ustack, user_root, PROC_PID_INIT, heap_base);
     if (rc) kpanic("kmain: proc_create_user pid 1: %d", rc);
 
     /* Create a second process with the same binary to test scheduling. */
@@ -195,9 +196,10 @@ void kmain(u64 hartid, u64 fdt_addr)
         vaddr_t entry2;
         paddr_t user_root2;
         vaddr_t ustack2;
-        rc = spx_load(img, init_size, &entry2, &user_root2, &ustack2);
+        vaddr_t heap_base2;
+        rc = spx_load(img, init_size, &entry2, &user_root2, &ustack2, &heap_base2);
         if (rc) kpanic("kmain: spx_load pid 2: %d", rc);
-        rc = proc_create_user(entry2, ustack2, user_root2, 2);
+        rc = proc_create_user(entry2, ustack2, user_root2, 2, heap_base2);
         if (rc) kpanic("kmain: proc_create_user pid 2: %d", rc);
     }
 

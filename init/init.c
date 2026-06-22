@@ -66,6 +66,7 @@ void _start(void)
             puts("\n  help       - this help\n");
             puts("  echo <t>   - print text\n");
             puts("  cat <f>    - print file\n");
+            puts("  exec <f>   - run SPX program\n");
             puts("  clear      - clear screen\n");
             puts("  exit       - halt\n");
             continue;
@@ -77,14 +78,20 @@ void _start(void)
         }
         if (starts_with(cmd, "cat ")) {
             const char *path = skip(cmd + 4);
-            int fd = (int)syscall(8, (long)path, 0, 0);  /* SYS_open = 8 */
+            int fd = (int)syscall(8, (long)path, 0, 0);
             if (fd < 0) { puts("cat: cannot open\n"); continue; }
             char buf[256];
             long r;
             while ((r = syscall(2, fd, (long)buf, 256)) > 0) {
                 syscall(1, 1, (long)buf, r);
             }
-            syscall(9, fd, 0, 0);  /* SYS_close = 9 */
+            syscall(9, fd, 0, 0);
+            continue;
+        }
+        if (starts_with(cmd, "exec ")) {
+            const char *path = skip(cmd + 5);
+            long r = syscall(12, (long)path, 0, 0);
+            if (r < 0) { puts("exec: failed\n"); continue; }
             continue;
         }
         if (strcmp(cmd, "clear") == 0) {

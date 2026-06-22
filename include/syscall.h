@@ -26,6 +26,8 @@
 #define SYS_close    9
 #define SYS_lseek    10
 #define SYS_stat     11
+#define SYS_exec     12
+#define SYS_sbrk     13
 #define SYS_nosys    0xFFFFFFFFUL
 
 void syscall_handler(trap_frame_t *f);

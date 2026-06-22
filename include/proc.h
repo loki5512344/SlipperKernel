@@ -27,6 +27,7 @@ typedef struct {
     paddr_t       root_pa;      /* root of user page table (satp value) */
     vaddr_t       entry;
     vaddr_t       ustack;
+    vaddr_t       heap_brk;     /* current heap break */
     trap_frame_t  tf;           /* saved across traps */
     u8            kstack[16 * 1024] __attribute__((aligned(16)));
 } proc_t;
@@ -34,7 +35,8 @@ typedef struct {
 extern volatile int  need_resched;
 
 int  proc_init(void);
-int  proc_create_user(vaddr_t entry, vaddr_t ustack, paddr_t root_pa, u32 pid);
+int  proc_create_user(vaddr_t entry, vaddr_t ustack, paddr_t root_pa, u32 pid,
+                      vaddr_t heap_brk);
 proc_t *proc_current(void);
 proc_t *proc_by_pid(u32 pid);
 
@@ -42,6 +44,7 @@ __attribute__((noreturn))
 void proc_enter_user(u32 pid);
 
 void proc_exit(u32 pid, int code);
+int  proc_exec(const char *path, trap_frame_t *f);
 
 void sched_tick(void);
 void sched_yield(trap_frame_t *f);

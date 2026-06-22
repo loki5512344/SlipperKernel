@@ -9,6 +9,8 @@
 #include "klog.h"
 #include "riscv.h"
 #include "vfs.h"
+#include "spx.h"
+#include "heap.h"
 
 static proc_t g_procs[4];
 static proc_t *g_current = NULL;
@@ -38,7 +40,8 @@ proc_t *proc_by_pid(u32 pid)
     return NULL;
 }
 
-int proc_create_user(vaddr_t entry, vaddr_t ustack, paddr_t root_pa, u32 pid)
+int proc_create_user(vaddr_t entry, vaddr_t ustack, paddr_t root_pa, u32 pid,
+                     vaddr_t heap_brk)
 {
     proc_t *p = NULL;
     for (int i = 0; i < (int)ARR_LEN(g_procs); ++i) {
@@ -49,19 +52,70 @@ int proc_create_user(vaddr_t entry, vaddr_t ustack, paddr_t root_pa, u32 pid)
     u8 *tfb = (u8 *)&p->tf;
     for (usize i = 0; i < sizeof(trap_frame_t); ++i) tfb[i] = 0;
 
-    p->pid     = pid;
-    p->ring    = PROC_RING_USER;
-    p->state   = PROC_STATE_READY;
-    p->root_pa = root_pa;
+    p->pid      = pid;
+    p->ring     = PROC_RING_USER;
+    p->state    = PROC_STATE_READY;
+    p->root_pa  = root_pa;
+    p->entry    = entry;
+    p->ustack   = ustack;
+    p->heap_brk = heap_brk;
+    p->tf.sepc  = entry;
+    p->tf.sp    = ustack;
+    p->tf.a0    = 0;
+    p->tf.a1    = ustack - 256;
+    p->tf.sstatus = SSTATUS_SPIE;
+    p->tf.satp    = SATP_MODE_SV39 | ((u64)root_pa >> PAGE_SHIFT);
+
+    return 0;
+}
+
+int proc_exec(const char *path, trap_frame_t *f)
+{
+    proc_t *p = g_current;
+    if (!p) return SL_ERR_INVAL;
+
+    int fd = vfs_open(path);
+    kinf("proc: exec fd=%d path=%s", fd, path);
+    if (fd < 0) return fd;
+
+    u32 fsize = 0;
+    vfs_stat(fd, &fsize);
+    if (fsize == 0 || fsize > MB(4)) { vfs_close(fd); return SL_ERR_INVAL; }
+
+    void *img = kmalloc(fsize);
+    if (!img) { vfs_close(fd); return SL_ERR_NOMEM; }
+
+    int n = vfs_read(fd, img, fsize);
+    vfs_close(fd);
+    if (n != (int)fsize) { kfree(img); return SL_ERR_IO; }
+
+    vaddr_t entry, ustack, heap_brk;
+    paddr_t new_root;
+    int rc = spx_load(img, fsize, &entry, &new_root, &ustack, &heap_brk);
+    kfree(img);
+    if (rc) return rc;
+
+    /* Replace process image. */
+    vmm_destroy_root(p->root_pa);
+    p->root_pa = new_root;
     p->entry   = entry;
     p->ustack  = ustack;
+    p->heap_brk = heap_brk;
+
+    /* Rewrite trap frame so sret goes to new process. */
+    u8 *tfb = (u8 *)&p->tf;
+    for (usize i = 0; i < sizeof(trap_frame_t); ++i) tfb[i] = 0;
     p->tf.sepc = entry;
     p->tf.sp   = ustack;
     p->tf.a0   = 0;
     p->tf.a1   = ustack - 256;
     p->tf.sstatus = SSTATUS_SPIE;
-    p->tf.satp    = SATP_MODE_SV39 | ((u64)root_pa >> PAGE_SHIFT);
+    p->tf.satp    = SATP_MODE_SV39 | ((u64)new_root >> PAGE_SHIFT);
 
+    /* Copy to current trap frame on stack — trap_handler will sret from it. */
+    *f = p->tf;
+
+    kinf("proc: exec %s entry=0x%lx", path, entry);
     return 0;
 }
 
