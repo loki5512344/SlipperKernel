@@ -209,6 +209,6 @@ extern "Rust" {
 pub extern "C" fn trap_handler(tf: *mut crate::arch::trap_frame::TrapFrame) {
     let frame = unsafe { &mut *tf };
     unsafe {
-        crate::kernel::trap::handle(frame);
+        crate::srv::trap::handle(frame);
     }
 }

@@ -3,17 +3,17 @@ use crate::arch::csr;
 use crate::arch::regs::*;
 use crate::drivers::{plic, uart, virtio};
 use crate::fs::vfs;
-use crate::kernel::{timer, trap};
 use crate::libfdt::fdt;
 use crate::mm::{heap, pmm, vmm};
-use crate::proc::proc;
+use crate::proc;
+use crate::srv::{timer, trap};
 use onyx_core::fmt::Arg;
 
 const BANNER: &str = "\n  ___ _ _                  _\n / __(_) |_ _____ __ _____| |__\n \\__ \\ | \\ V / -_) V /___| / /_\n |___/_|_|\\_/\\___|\\_/    |_\\__/\n  OnyxKernel v0.3 (Rust) — RISC-V 64 GC\n\n";
 
 pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
     uart::init_default();
-    crate::kernel::klog::puts(BANNER);
+    crate::srv::klog::puts(BANNER);
     crate::kinf!(
         "kmain",
         "hartid=%d fdt=%p",
@@ -79,7 +79,7 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         Ok(t) => t,
         Err(e) => {
             crate::kerr!("kmain", "open /bin/init failed: %s", Arg::from(e.as_str()));
-            crate::kernel::klog::halt();
+            crate::srv::klog::halt();
         }
     };
     let mut size = 0u32;
@@ -90,7 +90,7 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         Ok(p) => p,
         Err(e) => {
             crate::kerr!("kmain", "kmalloc failed: %s", Arg::from(e.as_str()));
-            crate::kernel::klog::halt();
+            crate::srv::klog::halt();
         }
     };
     vfs::read(token, img, size).ok();
@@ -100,7 +100,7 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         Ok(r) => r,
         Err(e) => {
             crate::kerr!("kmain", "onx_load failed: %s", Arg::from(e.as_str()));
-            crate::kernel::klog::halt();
+            crate::srv::klog::halt();
         }
     };
     heap::kfree(img);

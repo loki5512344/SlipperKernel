@@ -72,15 +72,15 @@ pub fn emit(level: Level, tag: &str, fmt: &str, args: &[Arg]) {
 }
 
 #[macro_export]
-macro_rules! kdbg { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::kernel::klog::emit($crate::kernel::klog::Level::Dbg, $tag, $fmt, &[$($arg),*]) }; }
+macro_rules! kdbg { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::srv::klog::emit($crate::srv::klog::Level::Dbg, $tag, $fmt, &[$($arg),*]) }; }
 #[macro_export]
-macro_rules! kinf { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::kernel::klog::emit($crate::kernel::klog::Level::Inf, $tag, $fmt, &[$($arg),*]) }; }
+macro_rules! kinf { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::srv::klog::emit($crate::srv::klog::Level::Inf, $tag, $fmt, &[$($arg),*]) }; }
 #[macro_export]
-macro_rules! kwrn { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::kernel::klog::emit($crate::kernel::klog::Level::Wrn, $tag, $fmt, &[$($arg),*]) }; }
+macro_rules! kwrn { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::srv::klog::emit($crate::srv::klog::Level::Wrn, $tag, $fmt, &[$($arg),*]) }; }
 #[macro_export]
-macro_rules! kerr { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::kernel::klog::emit($crate::kernel::klog::Level::Err, $tag, $fmt, &[$($arg),*]) }; }
+macro_rules! kerr { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { $crate::srv::klog::emit($crate::srv::klog::Level::Err, $tag, $fmt, &[$($arg),*]) }; }
 #[macro_export]
-macro_rules! kpanic { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { { $crate::kernel::klog::emit($crate::kernel::klog::Level::Err, $tag, $fmt, &[$($arg),*]); $crate::kernel::klog::halt() } }; }
+macro_rules! kpanic { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { { $crate::srv::klog::emit($crate::srv::klog::Level::Err, $tag, $fmt, &[$($arg),*]); $crate::srv::klog::halt() } }; }
 
 pub use onyx_core::fmt::Arg as FmtArg;
 

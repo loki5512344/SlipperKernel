@@ -3,6 +3,15 @@
 //! Rings: 0=kernel, 1=root space, 2=user space.
 //! Processes are heap-allocated nodes in a linked list — no fixed array.
 //! Any number of processes can run (limited only by available memory).
+//!
+//! This module owns:
+//!   - the `Proc` descriptor and `ProcState` enum,
+//!   - the global process-list / current-process / next-pid state,
+//!   - alloc / free / lookup / lifecycle helpers (`init`, `alloc_proc`,
+//!     `free_proc`, `alloc_pid`, `current*`, `by_pid`, `create_user`,
+//!     `enter_user`, `exit`, `spawn`, `wait`, `count`).
+//!
+//! Scheduling and signals live in their own submodules.
 
 use crate::arch::regs::*;
 use crate::arch::trap_frame::TrapFrame;
@@ -78,13 +87,11 @@ impl Proc {
 }
 
 /// Head of the process linked list.
-static mut G_PROC_LIST: *mut Proc = ptr::null_mut();
+pub(super) static mut G_PROC_LIST: *mut Proc = ptr::null_mut();
 /// Currently running process (pointer into the list).
-static mut G_CURRENT: *mut Proc = ptr::null_mut();
+pub(super) static mut G_CURRENT: *mut Proc = ptr::null_mut();
 /// Next PID to allocate.
-static mut G_NEXT_PID: u32 = PROC_PID_INIT;
-/// Need reschedule flag.
-pub static mut NEED_RESCHED: bool = false;
+pub(super) static mut G_NEXT_PID: u32 = PROC_PID_INIT;
 
 pub unsafe fn init() {
     G_PROC_LIST = ptr::null_mut();
@@ -93,7 +100,7 @@ pub unsafe fn init() {
 }
 
 /// Allocate a new Proc node on the heap and add it to the list.
-unsafe fn alloc_proc() -> KResult<*mut Proc> {
+pub(super) unsafe fn alloc_proc() -> KResult<*mut Proc> {
     let p = heap::kmalloc(core::mem::size_of::<Proc>())? as *mut Proc;
     // Zero the entire struct.
     ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<Proc>());
@@ -118,7 +125,7 @@ unsafe fn alloc_proc() -> KResult<*mut Proc> {
 }
 
 /// Free a Proc node from the list and heap.
-unsafe fn free_proc(p: *mut Proc) {
+pub(super) unsafe fn free_proc(p: *mut Proc) {
     // Remove from linked list.
     if G_PROC_LIST == p {
         G_PROC_LIST = (*p).next;
@@ -134,7 +141,7 @@ unsafe fn free_proc(p: *mut Proc) {
     heap::kfree(p as *mut u8);
 }
 
-fn alloc_pid() -> u32 {
+pub(super) fn alloc_pid() -> u32 {
     unsafe {
         let pid = G_NEXT_PID;
         G_NEXT_PID = pid + 1;
@@ -288,7 +295,7 @@ pub unsafe fn wait(tf: &mut TrapFrame, status_out: *mut i32) -> KResult<u32> {
     // The `Err` below is unreachable in practice but keeps the type system
     // happy.
     (*G_CURRENT).state = ProcState::Waiting;
-    sched_yield(tf);
+    super::scheduler::sched_yield(tf);
     Err(Errno::NoEnt)
 }
 
@@ -302,8 +309,8 @@ pub unsafe fn enter_user(pid: u32) -> ! {
         p = (*p).next;
     }
     if p.is_null() {
-        crate::kernel::klog::puts("proc: enter_user: pid not found, halting\n");
-        crate::kernel::klog::halt();
+        crate::srv::klog::puts("proc: enter_user: pid not found, halting\n");
+        crate::srv::klog::halt();
     }
     (*p).state = ProcState::Running;
     G_CURRENT = p;
@@ -336,73 +343,6 @@ pub unsafe fn exit(pid: u32, code: i32) {
     }
 }
 
-pub unsafe fn sched_tick() {
-    if !G_CURRENT.is_null() && !matches!((*G_CURRENT).state, ProcState::Free) {
-        NEED_RESCHED = true;
-    }
-}
-
-pub unsafe fn set_need_resched(v: bool) {
-    NEED_RESCHED = v;
-}
-
-pub unsafe fn sched_yield(tf: &mut TrapFrame) {
-    if G_CURRENT.is_null() {
-        crate::kernel::klog::puts("proc: no current process, halting\n");
-        crate::kernel::klog::halt();
-    }
-    (*G_CURRENT).tf = *tf;
-    if matches!((*G_CURRENT).state, ProcState::Running) {
-        (*G_CURRENT).state = ProcState::Ready;
-    }
-    // Round-robin: find next Ready process after current.
-    let _cur_pid = (*G_CURRENT).pid;
-    let mut next: *mut Proc = ptr::null_mut();
-    // Start from current's next, wrap around.
-    let mut start = (*G_CURRENT).next;
-    let mut first_pass = true;
-    loop {
-        let mut cur = start;
-        while !cur.is_null() {
-            if matches!((*cur).state, ProcState::Ready) {
-                next = cur;
-                break;
-            }
-            cur = (*cur).next;
-        }
-        if !next.is_null() {
-            break;
-        }
-        // Wrap around to head of list.
-        if first_pass {
-            start = G_PROC_LIST;
-            first_pass = false;
-        } else {
-            break;
-        }
-    }
-    if next.is_null() {
-        // No ready process. If the current process is Exited or Waiting, the
-        // system is deadlocked (no one can make progress) — halt. Otherwise
-        // (current is Running), keep running the current process.
-        if matches!((*G_CURRENT).state, ProcState::Exited | ProcState::Waiting) {
-            crate::kernel::klog::puts("proc: no ready processes, halting\n");
-            crate::kernel::klog::halt();
-        }
-        (*G_CURRENT).state = ProcState::Running;
-        NEED_RESCHED = false;
-        *tf = (*G_CURRENT).tf;
-        return;
-    }
-    (*next).state = ProcState::Running;
-    G_CURRENT = next;
-    NEED_RESCHED = false;
-    let next_kstack_top = (*next).kstack.as_ptr().add(KSTACK_SIZE) as usize;
-    let dst = (next_kstack_top - core::mem::size_of::<TrapFrame>()) as *mut TrapFrame;
-    ptr::write_volatile(dst, (*next).tf);
-    crate::arch::asm::sched_switch(dst as usize);
-}
-
 /// Count active processes (for diagnostics).
 pub fn count() -> usize {
     unsafe {
@@ -416,60 +356,4 @@ pub fn count() -> usize {
         }
         n
     }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Signals (MVP)
-// ════════════════════════════════════════════════════════════════════════════
-//
-// Signals are delivered via two bitmasks per process: `pending_signals`
-// (delivered but not yet handled) and `signal_mask` (blocked). Signal 9
-// (KILL) is always honored and cannot be blocked. The kernel has no
-// user-space signal handlers in this MVP — KILL terminates the process,
-// every other signal is silently cleared (it serves only as a wakeup
-// mechanism for blocked syscalls like `wait` and `read`).
-
-/// Signal number for KILL (POSIX SIGKILL = 9). Always honored, never blocked.
-pub const SIG_KILL: u32 = 9;
-
-/// Deliver `signal` to process `pid`. Sets the corresponding bit in the
-/// target's `pending_signals`. If the target is `Waiting`, it is woken
-/// (transitioned to `Ready`) so it can run again and observe the signal.
-pub unsafe fn signal_send(pid: u32, signal: u32) -> KResult<()> {
-    if signal >= 32 {
-        return Err(Errno::Inval);
-    }
-    let p = by_pid(pid).ok_or(Errno::NoEnt)?;
-    p.pending_signals |= 1u32 << signal;
-    if matches!(p.state, ProcState::Waiting) {
-        p.state = ProcState::Ready;
-    }
-    Ok(())
-}
-
-/// Check the current process for pending unblocked signals. Called from the
-/// trap handler after every trap (just before returning to user space).
-///
-/// - Signal 9 (KILL): terminate the process (call `exit` with code 128+9).
-///   Sets `NEED_RESCHED` so the trap handler will yield to the next process.
-/// - Any other signal: clear its bit (MVP — no user-space handlers).
-pub unsafe fn signal_check(tf: &mut TrapFrame) {
-    let _ = tf;
-    if G_CURRENT.is_null() {
-        return;
-    }
-    let pid = (*G_CURRENT).pid;
-    // KILL cannot be blocked — check it first.
-    if (*G_CURRENT).pending_signals & (1u32 << SIG_KILL) != 0 {
-        (*G_CURRENT).pending_signals &= !(1u32 << SIG_KILL);
-        exit(pid, 128 + SIG_KILL as i32);
-        NEED_RESCHED = true;
-        return;
-    }
-    let pending = (*G_CURRENT).pending_signals & !(*G_CURRENT).signal_mask;
-    if pending == 0 {
-        return;
-    }
-    // MVP: no user-space handlers — clear all other pending unblocked signals.
-    (*G_CURRENT).pending_signals &= (*G_CURRENT).signal_mask;
 }

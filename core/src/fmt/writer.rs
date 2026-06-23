@@ -1,5 +1,8 @@
+//! Format trait + vformat engine.
+
 #![allow(dead_code)]
 #![allow(unused_imports)]
+
 use crate::parser::{le32, le64};
 
 pub trait Write {
@@ -10,10 +13,11 @@ pub trait Write {
 }
 
 #[derive(Clone, Copy)]
-struct FmtSpec {
-    width: usize,
-    zero_pad: bool,
+pub(crate) struct FmtSpec {
+    pub width: usize,
+    pub zero_pad: bool,
 }
+
 fn parse_num(buf: &[u8]) -> (usize, usize) {
     let mut v = 0usize;
     let mut i = 0;
@@ -26,7 +30,7 @@ fn parse_num(buf: &[u8]) -> (usize, usize) {
     (v, i)
 }
 
-pub fn vformat<W: Write>(out: &mut W, fmt: &str, args: &[Arg]) {
+pub fn vformat<W: Write>(out: &mut W, fmt: &str, args: &[super::Arg]) {
     let bytes = fmt.as_bytes();
     let mut i = 0;
     let mut arg_idx = 0;
@@ -69,9 +73,9 @@ pub fn vformat<W: Write>(out: &mut W, fmt: &str, args: &[Arg]) {
         match conv {
             b'%' => out.write_char(b'%'),
             b's' => {
-                if let Some(Arg::Str(s)) = arg {
+                if let Some(super::Arg::Str(s)) = arg {
                     out.write_str(s);
-                } else if let Some(Arg::CStr(ptr)) = arg {
+                } else if let Some(super::Arg::CStr(ptr)) = arg {
                     unsafe {
                         let mut p = *ptr;
                         while *p != 0 {
@@ -83,35 +87,35 @@ pub fn vformat<W: Write>(out: &mut W, fmt: &str, args: &[Arg]) {
                 arg_idx += 1;
             }
             b'c' => {
-                if let Some(Arg::Char(c)) = arg {
+                if let Some(super::Arg::Char(c)) = arg {
                     out.write_char(*c);
                 }
                 arg_idx += 1;
             }
             b'd' => {
-                if let Some(Arg::I64(v)) = arg {
+                if let Some(super::Arg::I64(v)) = arg {
                     write_dec(out, *v, spec);
-                } else if let Some(Arg::U64(v)) = arg {
+                } else if let Some(super::Arg::U64(v)) = arg {
                     write_dec(out, *v as i64, spec);
-                } else if let Some(Arg::USize(v)) = arg {
+                } else if let Some(super::Arg::USize(v)) = arg {
                     write_dec(out, *v as i64, spec);
-                } else if let Some(Arg::ISize(v)) = arg {
+                } else if let Some(super::Arg::ISize(v)) = arg {
                     write_dec(out, *v as i64, spec);
                 }
                 arg_idx += 1;
             }
             b'u' => {
-                if let Some(Arg::U64(v)) = arg {
+                if let Some(super::Arg::U64(v)) = arg {
                     write_hex_or_dec(out, *v, spec, false);
-                } else if let Some(Arg::USize(v)) = arg {
+                } else if let Some(super::Arg::USize(v)) = arg {
                     write_hex_or_dec(out, *v as u64, spec, false);
                 }
                 arg_idx += 1;
             }
             b'x' => {
-                if let Some(Arg::U64(v)) = arg {
+                if let Some(super::Arg::U64(v)) = arg {
                     write_hex_or_dec(out, *v, spec, true);
-                } else if let Some(Arg::USize(v)) = arg {
+                } else if let Some(super::Arg::USize(v)) = arg {
                     write_hex_or_dec(out, *v as u64, spec, true);
                 }
                 arg_idx += 1;
@@ -119,8 +123,8 @@ pub fn vformat<W: Write>(out: &mut W, fmt: &str, args: &[Arg]) {
             b'p' => {
                 out.write_str("0x");
                 let pv = match arg {
-                    Some(Arg::U64(v)) => Some(*v),
-                    Some(Arg::USize(v)) => Some(*v as u64),
+                    Some(super::Arg::U64(v)) => Some(*v),
+                    Some(super::Arg::USize(v)) => Some(*v as u64),
                     _ => None,
                 };
                 if let Some(v) = pv {
@@ -218,107 +222,5 @@ fn write_hex_or_dec<W: Write>(out: &mut W, v: u64, spec: FmtSpec, hex: bool) {
     }
     for k in (0..len).rev() {
         out.write_char(buf[k]);
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum Arg<'a> {
-    Str(&'a str),
-    CStr(*const u8),
-    Char(u8),
-    I64(i64),
-    U64(u64),
-    ISize(isize),
-    USize(usize),
-}
-
-impl<'a> From<&'a str> for Arg<'a> {
-    fn from(s: &'a str) -> Self {
-        Self::Str(s)
-    }
-}
-impl<'a> From<&'a [u8]> for Arg<'a> {
-    fn from(s: &'a [u8]) -> Self {
-        Self::Str(core::str::from_utf8(s).unwrap_or("?"))
-    }
-}
-impl From<i32> for Arg<'_> {
-    fn from(v: i32) -> Self {
-        Self::I64(i64::from(v))
-    }
-}
-impl From<i64> for Arg<'_> {
-    fn from(v: i64) -> Self {
-        Self::I64(v)
-    }
-}
-impl From<u32> for Arg<'_> {
-    fn from(v: u32) -> Self {
-        Self::U64(u64::from(v))
-    }
-}
-impl From<u64> for Arg<'_> {
-    fn from(v: u64) -> Self {
-        Self::U64(v)
-    }
-}
-impl From<usize> for Arg<'_> {
-    fn from(v: usize) -> Self {
-        Self::USize(v)
-    }
-}
-impl From<u8> for Arg<'_> {
-    fn from(v: u8) -> Self {
-        Self::Char(v)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    struct Buf {
-        s: alloc::string::String,
-    }
-    impl Buf {
-        fn new() -> Self {
-            Self {
-                s: alloc::string::String::new(),
-            }
-        }
-    }
-    impl Write for Buf {
-        fn write_str(&mut self, s: &str) {
-            self.s.push_str(s);
-        }
-    }
-    #[test]
-    fn test_simple() {
-        let mut b = Buf::new();
-        vformat(&mut b, "hello %s!", &[Arg::from("world")]);
-        assert_eq!(b.s, "hello world!");
-    }
-    #[test]
-    fn test_dec_pad() {
-        let mut b = Buf::new();
-        vformat(&mut b, "n=%05d", &[Arg::from(42i32)]);
-        assert_eq!(b.s, "n=00042");
-    }
-    #[test]
-    fn test_hex() {
-        let mut b = Buf::new();
-        vformat(&mut b, "0x%08x", &[Arg::from(0xDEADBEEFu32)]);
-        assert_eq!(b.s, "0xdeadbeef");
-    }
-    #[test]
-    fn test_neg() {
-        let mut b = Buf::new();
-        vformat(&mut b, "%d", &[Arg::from(-123i64)]);
-        assert_eq!(b.s, "-123");
-    }
-    #[test]
-    fn test_int64_min() {
-        let mut b = Buf::new();
-        vformat(&mut b, "%d", &[Arg::from(i64::MIN)]);
-        assert_eq!(b.s, "-9223372036854775808");
     }
 }

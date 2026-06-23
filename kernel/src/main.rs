@@ -51,21 +51,20 @@ extern crate onyx_core;
 pub mod arch;
 pub mod drivers;
 pub mod fs;
-pub mod kalloc;
-pub mod kernel;
 pub mod libfdt;
 pub mod mm;
 pub mod proc;
+pub mod srv;
 pub mod syscall;
 
 use core::panic::PanicInfo;
 
 #[no_mangle]
 pub unsafe extern "Rust" fn kmain(hartid: usize, fdt_addr: usize) -> ! {
-    crate::kernel::main::kmain(hartid, fdt_addr)
+    crate::srv::main::kmain(hartid, fdt_addr)
 }
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    crate::kernel::klog::panic_handler(info)
+    crate::srv::klog::panic_handler(info)
 }

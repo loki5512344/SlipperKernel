@@ -2,8 +2,8 @@
 use crate::arch::regs::*;
 use crate::arch::trap_frame::TrapFrame;
 use crate::drivers::plic;
-use crate::kernel::timer;
-use crate::proc::proc;
+use crate::proc;
+use crate::srv::timer;
 use crate::syscall::handler;
 
 pub unsafe fn init() {
@@ -62,7 +62,7 @@ pub unsafe fn handle(tf: &mut TrapFrame) {
                         onyx_core::fmt::Arg::from(stval),
                         onyx_core::fmt::Arg::from(sstatus)
                     );
-                    crate::kernel::klog::halt();
+                    crate::srv::klog::halt();
                 }
                 crate::kerr!(
                     "trap",
@@ -105,7 +105,7 @@ pub unsafe fn handle(tf: &mut TrapFrame) {
         if let Some(p) = proc::by_pid(pid) {
             if matches!(p.state, proc::ProcState::Exited) {
                 proc::sched_yield(tf);
-                crate::kernel::klog::halt();
+                crate::srv::klog::halt();
             }
         }
     }

@@ -65,8 +65,8 @@ pub unsafe fn init(dram_base: u64, dram_size: u64) {
     for i in 0..bitmap_pages {
         bm_set(i);
     }
-    crate::kernel::klog::emit(
-        crate::kernel::klog::Level::Inf,
+    crate::srv::klog::emit(
+        crate::srv::klog::Level::Inf,
         "pmm",
         "dram 0x%x + 0x%x, managed base=0x%x pages=%d free=%d",
         &[

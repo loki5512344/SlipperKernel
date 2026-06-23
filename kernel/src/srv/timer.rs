@@ -1,7 +1,7 @@
 //! CLINT timer (100 Hz tick).
 use crate::arch::regs::*;
 use crate::arch::{csr, mmio::Mmio};
-use crate::proc::proc;
+use crate::proc;
 static mut G_MTIME: usize = 0;
 static mut G_MTIMECMP: usize = 0;
 static mut G_FREQ: u64 = CLINT_FREQ_QEMU;
