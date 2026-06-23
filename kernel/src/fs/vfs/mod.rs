@@ -4,15 +4,57 @@
 //! `Fs` enum, plus the constants and the `mount_root`/`init` entry points.
 //! File operations (open/close/read/write/stat/lseek/create/mkdir) live in
 //! `file.rs`; `readdir` lives in `dir.rs`.
-use crate::fs::{fat32, onyxfs};
+use crate::fs::{fat32, onyxfs, procfs};
 use onyx_core::errno::{Errno, KResult};
 
 pub const VFS_MAX_FDS: usize = 16;
+pub const MAX_MOUNTS: usize = 4;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Fs {
     None = 0,
     Onyx = 1,
     Fat32 = 2,
+    Proc = 3,
+}
+
+#[derive(Clone, Copy)]
+pub struct MountEntry {
+    pub path: &'static [u8],
+    pub fs: Fs,
+}
+
+/// Global mount table. procfs is mounted at "proc" during init.
+pub(super) static mut G_MOUNTS: [MountEntry; MAX_MOUNTS] = [
+    MountEntry { path: b"", fs: Fs::None },
+    MountEntry { path: b"", fs: Fs::None },
+    MountEntry { path: b"", fs: Fs::None },
+    MountEntry { path: b"", fs: Fs::None },
+];
+
+pub unsafe fn mount_procfs() {
+    G_MOUNTS[0] = MountEntry {
+        path: b"proc",
+        fs: Fs::Proc,
+    };
+}
+
+/// Resolve a path to the target filesystem and sub-path.
+/// The input `path` has no leading '/'.
+pub(super) unsafe fn resolve_mount(path: &[u8]) -> (Fs, &[u8]) {
+    for m in G_MOUNTS.iter() {
+        if m.fs == Fs::None {
+            continue;
+        }
+        if path == m.path {
+            return (m.fs, b"");
+        }
+        if path.starts_with(m.path) && path.len() > m.path.len() && path[m.path.len()] == b'/' {
+            let sub = &path[m.path.len() + 1..];
+            return (m.fs, sub);
+        }
+    }
+    (root_fs(), path)
 }
 pub const PERM_READ: u32 = 1;
 pub const PERM_WRITE: u32 = 2;

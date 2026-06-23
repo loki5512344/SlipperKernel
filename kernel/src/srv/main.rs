@@ -72,6 +72,8 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
             Err(e) => crate::kerr!("vfs", "mount failed: %s", Arg::from(e.as_str())),
         }
     }
+    vfs::mount_procfs();
+    crate::kinf!("vfs", "procfs mounted at /proc");
 
     // Load /bin/init as PID 1 in root space (ring 1).
     let path = b"/bin/init";

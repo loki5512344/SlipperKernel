@@ -15,3 +15,15 @@ path = "src/osh.rs"
 [[bin]]
 name = "onyx-login"
 path = "src/login.rs"
+
+[[bin]]
+name = "onyx-passwd"
+path = "src/passwd.rs"
+
+[[bin]]
+name = "onyx-useradd"
+path = "src/useradd.rs"
+
+[[bin]]
+name = "onyx-userdel"
+path = "src/userdel.rs"

@@ -28,6 +28,26 @@ echo "==> Converting userland ELFs → .onx"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-init" "$BUILD/init.onx"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-login" "$BUILD/login.onx"
 "$ROOT/target/release/elf2onx" "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-osh" "$BUILD/osh.onx"
+"$ROOT/target/release/elf2onx" "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-passwd" "$BUILD/passwd.onx"
+"$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-useradd" "$BUILD/useradd.onx"
+"$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-userdel" "$BUILD/userdel.onx"
+
+# No default passwd/shadow — first boot creates them interactively.
+
+# Create manifest
+cat > "$BUILD/manifest.txt" << EOF
+dir /bin
+dir /etc
+dir /service
+dir /users
+dir /font
+file $BUILD/init.onx /bin/init --ring=1
+file $BUILD/login.onx /bin/login --ring=1
+file $BUILD/osh.onx /bin/osh
+file $BUILD/passwd.onx /bin/passwd
+file $BUILD/useradd.onx /bin/useradd --ring=1
+file $BUILD/userdel.onx /bin/userdel --ring=1
+EOF
 
 # Create OnyxFS disk image using manifest
 echo "==> Creating OnyxFS disk image"
@@ -45,7 +65,8 @@ SLBA=10240
 dd if="$BUILD/disk.img" of="$BUILD/boot.img" bs=512 seek=$SLBA conv=notrunc 2>/dev/null
 
 echo "==> Starting QEMU"
-timeout 10 qemu-system-riscv64 \
+# No timeout — interactive first-boot setup requires user input.
+qemu-system-riscv64 \
     -M virt -m 256M \
     -bios "$BOOT_DIR/bootloader.bin" \
     -drive file="$BUILD/boot.img",format=raw,if=none,id=drive0 \

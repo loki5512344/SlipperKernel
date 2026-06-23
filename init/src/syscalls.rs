@@ -110,3 +110,28 @@ pub unsafe fn exec(path: *const u8) -> i64 {
     asm!("ecall", in("a7") SYS_EXEC, in("a0") path as usize, lateout("a0") ret);
     ret
 }
+
+pub const SYS_CREATE: u64 = 25;
+pub const SYS_WRITE_FD: u64 = 24;
+pub const SYS_MKDIR: u64 = 26;
+
+#[inline]
+pub unsafe fn create(path: *const u8, mode: u64, reserved: u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_CREATE, in("a0") path as usize, in("a1") mode, in("a2") reserved, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn write_fd(fd: u64, buf: *const u8, len: usize) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_WRITE_FD, in("a0") fd, in("a1") buf as usize, in("a2") len, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn mkdir(path: *const u8) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_MKDIR, in("a0") path as usize, lateout("a0") ret);
+    ret
+}

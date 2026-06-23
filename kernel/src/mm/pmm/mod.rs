@@ -75,6 +75,10 @@ pub fn free_pages() -> usize {
     unsafe { (*(&raw const G_PMM)).free_pages }
 }
 
+pub fn total_pages() -> usize {
+    unsafe { (*(&raw const G_PMM)).total_pages }
+}
+
 pub mod bitmap;
 pub mod slab;
 

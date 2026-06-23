@@ -1,5 +1,5 @@
 //! File creation — `create` (regular file) and `mkdir` (directory).
-use super::{alloc_fd, fd_token, FdToken, Fs, PERM_READ, PERM_SEEK, PERM_WRITE};
+use super::{alloc_fd, fd_token, resolve_mount, FdToken, Fs, PERM_READ, PERM_SEEK, PERM_WRITE};
 use crate::fs::onyxfs;
 use crate::proc;
 use onyx_core::errno::{Errno, KResult};
@@ -26,6 +26,12 @@ pub unsafe fn create(path: &[u8], mode: u32) -> KResult<FdToken> {
     if path.is_empty() || path[0] != b'/' {
         return Err(Errno::Inval);
     }
+    // Reject creation under procfs.
+    let name = &path[1..];
+    let (fs, _) = super::resolve_mount(name);
+    if fs == Fs::Proc {
+        return Err(Errno::Perm);
+    }
     let (parent_path, filename) = split_parent(path);
     if filename.is_empty() {
         return Err(Errno::Inval);
@@ -51,6 +57,11 @@ pub unsafe fn create(path: &[u8], mode: u32) -> KResult<FdToken> {
 pub unsafe fn mkdir(path: &[u8]) -> KResult<()> {
     if path.is_empty() || path[0] != b'/' {
         return Err(Errno::Inval);
+    }
+    let name = &path[1..];
+    let (fs, _) = resolve_mount(name);
+    if fs == Fs::Proc {
+        return Err(Errno::Perm);
     }
     let (parent_path, dirname) = split_parent(path);
     if dirname.is_empty() {

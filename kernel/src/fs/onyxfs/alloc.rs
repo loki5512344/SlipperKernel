@@ -105,12 +105,55 @@ pub(super) unsafe fn add_dirent(
     };
     let pb = &raw mut G_BUF;
     read_block(dir_blk, &mut *pb)?;
+
+    // First pass: check if an entry with the same name already exists.
+    // If so, overwrite its inode number (effectively replaces the file).
     for i in 0..dpb {
         let off = i * entry_size;
         if off + entry_size > ONYFS_BLOCK_SIZE {
             break;
         }
-        // Both v1 (36-byte) and v2 (40-byte) dirents store inode at offset 32.
+        let inode_off = off + 32;
+        let existing = u32::from_le_bytes([
+            (*pb)[inode_off],
+            (*pb)[inode_off + 1],
+            (*pb)[inode_off + 2],
+            (*pb)[inode_off + 3],
+        ]);
+        if existing == 0 {
+            continue;
+        }
+        // Check if name matches.
+        let existing_name = &(&*pb)[off..off + ONYFS_NAME_MAX];
+        let mut match_len = 0;
+        while match_len < name.len() && match_len < ONYFS_NAME_MAX {
+            if existing_name[match_len] != name[match_len] {
+                break;
+            }
+            match_len += 1;
+        }
+        if match_len == name.len() && (match_len >= ONYFS_NAME_MAX || existing_name[match_len] == 0) {
+            // Found existing entry — overwrite inode number.
+            let ino_bytes = target_ino.to_le_bytes();
+            (*pb)[inode_off] = ino_bytes[0];
+            (*pb)[inode_off + 1] = ino_bytes[1];
+            (*pb)[inode_off + 2] = ino_bytes[2];
+            (*pb)[inode_off + 3] = ino_bytes[3];
+            if *(&raw const G_VERSION) != ONYFS_V1 {
+                (*pb)[off + 36] = dtype;
+            }
+            journal_log(dir_blk, &*pb)?;
+            write_block(dir_blk, &*pb)?;
+            return Ok(());
+        }
+    }
+
+    // Second pass: find an empty slot.
+    for i in 0..dpb {
+        let off = i * entry_size;
+        if off + entry_size > ONYFS_BLOCK_SIZE {
+            break;
+        }
         let inode_off = off + 32;
         let existing = u32::from_le_bytes([
             (*pb)[inode_off],
@@ -136,7 +179,6 @@ pub(super) unsafe fn add_dirent(
         (*pb)[inode_off + 2] = ino_bytes[2];
         (*pb)[inode_off + 3] = ino_bytes[3];
         if *(&raw const G_VERSION) != ONYFS_V1 {
-            // v2 dirent: dtype at off+36, name_len at off+37.
             (*pb)[off + 36] = dtype;
             (*pb)[off + 37] = n as u8;
         }

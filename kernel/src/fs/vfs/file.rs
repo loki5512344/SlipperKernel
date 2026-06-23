@@ -3,7 +3,7 @@ use super::{
     alloc_fd, fd_check, fd_check_perm, fd_clear, fd_get, fd_set, fd_token, fd_update_pos, FdToken,
     Fs, G_ROOT_FS, PERM_READ, PERM_SEEK, PERM_WRITE,
 };
-use crate::fs::{fat32, onyxfs};
+use crate::fs::{fat32, onyxfs, procfs};
 use onyx_core::errno::{Errno, KResult};
 
 pub unsafe fn open(path: &[u8], perms: u32) -> KResult<FdToken> {
@@ -12,20 +12,33 @@ pub unsafe fn open(path: &[u8], perms: u32) -> KResult<FdToken> {
     }
     let name = &path[1..];
     let idx = alloc_fd(perms)?;
-    let mut st = onyxfs::OnyfsStat::default();
-    let (ino, size, fs) = match *(&raw const G_ROOT_FS) {
-        Fs::Onyx => {
-            onyxfs::lookup(name, &mut st)?;
-            (st.ino, st.size.min(u32::MAX as u64) as u32, Fs::Onyx)
+
+    // Check mount table first.
+    let (fs, subpath) = super::resolve_mount(name);
+    let (ino, size) = match fs {
+        Fs::Proc => {
+            let ino = procfs::lookup(subpath)?;
+            let st = procfs::stat(ino)?;
+            (ino, st.size)
         }
-        Fs::Fat32 => {
-            let mut cluster = 0u32;
-            let mut sz = 0u32;
-            fat32::lookup(name, &mut cluster, &mut sz)?;
-            (cluster, sz, Fs::Fat32)
+        _ => {
+            let mut st = onyxfs::OnyfsStat::default();
+            match *(&raw const G_ROOT_FS) {
+                Fs::Onyx => {
+                    onyxfs::lookup(name, &mut st)?;
+                    (st.ino, st.size.min(u32::MAX as u64) as u32)
+                }
+                Fs::Fat32 => {
+                    let mut cluster = 0u32;
+                    let mut sz = 0u32;
+                    fat32::lookup(name, &mut cluster, &mut sz)?;
+                    (cluster, sz)
+                }
+                _ => return Err(Errno::Inval),
+            }
         }
-        Fs::None => return Err(Errno::Inval),
     };
+
     fd_set(idx, ino, size, fs, 0);
     let fd = fd_get(idx);
     Ok(fd_token(idx, fd.epoch))
@@ -48,6 +61,7 @@ pub unsafe fn read(token: FdToken, buf: *mut u8, len: u32) -> KResult<u32> {
     let read_n = match fd.fs {
         Fs::Onyx => onyxfs::read(fd.ino, buf, fd.pos, to_read)?,
         Fs::Fat32 => fat32::read(fd.ino, buf, fd.pos, to_read)?,
+        Fs::Proc => procfs::read(fd.ino, buf, fd.pos, to_read)?,
         Fs::None => return Err(Errno::Inval),
     };
     fd_update_pos(idx, fd.pos + read_n);
@@ -59,6 +73,7 @@ pub unsafe fn write(token: FdToken, buf: *const u8, len: u32) -> KResult<u32> {
     let fd = fd_get(idx);
     let written = match fd.fs {
         Fs::Onyx => onyxfs::write(fd.ino, buf, fd.pos, len)?,
+        Fs::Proc => return Err(Errno::Perm),
         _ => return Err(Errno::NoSys),
     };
     let new_pos = fd.pos + written;

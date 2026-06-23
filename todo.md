@@ -20,25 +20,27 @@
 ## ❌ Осталось сделать:
 
 ### Приоритет 1 — Userland:
-- [ ] **`/bin/login`** — аутентификация (root + пользователи из /etc/passwd), dropring(USER), exec(/bin/osh)
-- [ ] **`/bin/osh`** — пользовательский shell (ring 2) с командами ls/cat/echo/exec/clear/exit
-- [ ] **`/bin/passwd`** — смена пароля (root + self)
-- [ ] **`/bin/useradd`** — добавление пользователя (root only)
-- [ ] **`/bin/userdel`** — удаление пользователя (root only)
-- [ ] **`/etc/passwd`** + `/etc/shadow` — парсинг, аутентификация
-- [ ] **`/users/`** — домашние директории пользователей (/users/username/)
-- [ ] **Per-process FD table** — сейчас FD глобальные, нужны per-process
+- [x] **`/bin/login`** — аутентификация (root + пользователи из /etc/passwd), dropring(USER), exec(/bin/osh)
+- [x] **`/bin/osh`** — пользовательский shell (ring 2) с командами ls/cat/echo/exec/clear/exit
+- [x] **`/bin/passwd`** — смена пароля (root + self)
+- [x] **`/bin/useradd`** — добавление пользователя (root only)
+- [x] **`/bin/userdel`** — удаление пользователя (root only)
+- [x] **`/etc/passwd`** + `/etc/shadow` — парсинг, аутентификация
+- [x] **`/users/`** — домашние директории пользователей (/users/username/)
+- [x] **Per-process FD table** — уже сделан (per-process VfsFd в Proc)
+- [x] **add_dirent overwrite** — create теперь перезаписывает существующий dirent (вместо дублирования)
+- [x] **First-boot setup** — нет дефолтных паролей; login запрашивает пароль root при первом запуске
 - [ ] **mkimage с поддиректориями** — --add-dir, --add file path для /bin/ /service/ /etc/ /users/ /font/
 
 ### Приоритет 2 — /proc/ файловая система:
-- [ ] **procfs** — виртуальная ФС с информацией о системе:
+- [x] **procfs** — виртуальная ФС с информацией о системе:
   - /proc/version — версия ядра
   - /proc/cpuinfo — модель, частота, кол-во ядер
   - /proc/meminfo — всего ОЗУ, свободно, занято
   - /proc/uptime — время работы системы
-  - /proc/load — нагрузка на CPU (общая + по ядрам)
+  - /proc/load — нагрузка на CPU (процессы)
   - /proc/stat — статистика ядра
-- [ ] Интеграция с VFS — монтирование на /proc при старте
+- [x] Интеграция с VFS — монтирование на /proc при старте (mount table / procfs module)
 
 ### Приоритет 3 — /font/ и шрифты:
 - [ ] **Поддержка шрифтов в VGA/framebuffer**:
