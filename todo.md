@@ -20,26 +20,46 @@
 ## ❌ Осталось сделать:
 
 ### Приоритет 1 — Userland:
-- [ ] **`/bin/login`** — аутентификация + dropring(USER) + exec(/bin/osh)
+- [ ] **`/bin/login`** — аутентификация (root + пользователи из /etc/passwd), dropring(USER), exec(/bin/osh)
 - [ ] **`/bin/osh`** — пользовательский shell (ring 2) с командами ls/cat/echo/exec/clear/exit
+- [ ] **`/bin/passwd`** — смена пароля (root + self)
+- [ ] **`/bin/useradd`** — добавление пользователя (root only)
+- [ ] **`/bin/userdel`** — удаление пользователя (root only)
 - [ ] **`/etc/passwd`** + `/etc/shadow` — парсинг, аутентификация
+- [ ] **`/users/`** — домашние директории пользователей (/users/username/)
 - [ ] **Per-process FD table** — сейчас FD глобальные, нужны per-process
-- [ ] **mkimage с поддиректориями** — --add-dir, --add file path для /bin/ /service/ /etc/
+- [ ] **mkimage с поддиректориями** — --add-dir, --add file path для /bin/ /service/ /etc/ /users/ /font/
 
-### Приоритет 2 — IPC:
+### Приоритет 2 — /proc/ файловая система:
+- [ ] **procfs** — виртуальная ФС с информацией о системе:
+  - /proc/version — версия ядра
+  - /proc/cpuinfo — модель, частота, кол-во ядер
+  - /proc/meminfo — всего ОЗУ, свободно, занято
+  - /proc/uptime — время работы системы
+  - /proc/load — нагрузка на CPU (общая + по ядрам)
+  - /proc/stat — статистика ядра
+- [ ] Интеграция с VFS — монтирование на /proc при старте
+
+### Приоритет 3 — /font/ и шрифты:
+- [ ] **Поддержка шрифтов в VGA/framebuffer**:
+  - /font/default.psf — основной шрифт (PSF формат)
+  - Загрузка шрифта при инициализации терминала
+  - Поддержка Unicode таблицы в шрифте
+
+### Приоритет 4 — IPC:
 - [ ] **IPC channels** — chan_create/connect/send/recv для root↔user коммуникации
 - [ ] **`/ipc/*` виртуальный путь** в VFS
 
-### Приоритет 3 — Драйверы:
+### Приоритет 5 — Драйверы:
 - [ ] **FDT parser** — сейчас hardcoded QEMU адреса, нужен настоящий парсер device tree
 - [ ] **PLIC IRQ dispatch** — сейчас просто log, нужна диспетчеризация прерываний
-- [ ] **Real hardware** — SDHCI драйвер для Milk-V Duo S
+- [ ] **Framebuffer драйвер** — вывод на экран + шрифты
+- [ ] **SDHCI драйвер** — для Milk-V Duo S
 
-### Приоритет 4 — Инструменты:
+### Приоритет 6 — Инструменты:
 - [ ] **elf2onx v2** — сейчас пишет v1, нужно использовать v2 формат с compressed_size
 - [ ] **mkimage v2** — создание v2 образов с snapshot area + journal
 
-### Приоритет 5 — Общее:
+### Приоритет 7 — Общее:
 - [ ] **Panic recovery** — сейчас panic = halt, нужен kdump
 - [ ] **Multi-core (SMP)** — сейчас 1 hart
-- [ ] **Per-process FD table** — сейчас глобальная таблица на 16 FD

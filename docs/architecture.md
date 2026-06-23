@@ -251,10 +251,13 @@ pub struct Proc {
 ## 14. Структура директорий
 
 ```
-/bin/             — бинарники (init, login, osh)
+/bin/             — бинарники (init, login, osh, passwd, useradd, userdel)
 /service/         — root-сервисы (запускаются init-ом)
 /dev/             — устройства
-/etc/             — конфиги
+/etc/             — конфиги (passwd, shadow)
+/proc/            — информация о системе (cpuinfo, meminfo, version, uptime, ...)
+/font/            — шрифты (psf, bdf)
+/users/           — домашние директории пользователей (/users/username/)
 ```
 
 ---
