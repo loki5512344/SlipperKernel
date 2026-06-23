@@ -174,6 +174,87 @@ pub unsafe fn read(token: FdToken, buf: *mut u8, len: u32) -> KResult<u32> {
     fd.pos += read_n;
     Ok(read_n)
 }
+
+/// Write `len` bytes from `buf` to an open file at its current position.
+/// Grows the file as needed. The fd must have been opened with PERM_WRITE.
+/// Only OnyxFS is supported (FAT32 is read-only in this kernel).
+pub unsafe fn write(token: FdToken, buf: *const u8, len: u32) -> KResult<u32> {
+    let fd = fd_check_perm(token, PERM_WRITE)?;
+    let written = match fd.fs {
+        Fs::Onyx => onyxfs::write(fd.ino, buf, fd.pos, len)?,
+        _ => return Err(Errno::NoSys),
+    };
+    fd.pos += written;
+    if fd.pos > fd.size {
+        fd.size = fd.pos;
+    }
+    Ok(written)
+}
+
+/// Split a NUL-free path like "/foo/bar/baz" into ("foo/bar", "baz").
+/// The leading '/' is stripped. If the path has no '/', returns ("", "foo").
+/// Used by `create` and `mkdir` to find the parent directory.
+unsafe fn split_parent(path: &[u8]) -> (&[u8], &[u8]) {
+    // Strip leading '/'.
+    let p = if !path.is_empty() && path[0] == b'/' {
+        &path[1..]
+    } else {
+        path
+    };
+    match p.iter().rposition(|&b| b == b'/') {
+        Some(idx) => (&p[..idx], &p[idx + 1..]),
+        None => (&[], p),
+    }
+}
+
+/// Create a new regular file at `path` and open it with read+write+seek
+/// permissions. Returns the new fd token. `mode` is the OnyxFS mode bits
+/// (e.g. `ONYFS_DT_REG`).
+pub unsafe fn create(path: &[u8], mode: u32) -> KResult<FdToken> {
+    if path.is_empty() || path[0] != b'/' {
+        return Err(Errno::Inval);
+    }
+    let (parent_path, filename) = split_parent(path);
+    if filename.is_empty() {
+        return Err(Errno::Inval);
+    }
+    let mut st = onyxfs::OnyfsStat::default();
+    let parent_ino = if parent_path.is_empty() {
+        onyx_core::formats::ONYFS_ROOT_INO
+    } else {
+        onyxfs::lookup(parent_path, &mut st)?
+    };
+    let new_ino = onyxfs::create(parent_ino, filename, mode)?;
+    // Open the new file with read+write+seek perms.
+    let idx = alloc_fd(PERM_READ | PERM_WRITE | PERM_SEEK)?;
+    let pf = &raw mut G_FDS;
+    let fd = &mut (*pf)[idx];
+    fd.ino = new_ino;
+    fd.size = 0;
+    fd.fs = Fs::Onyx;
+    fd.pos = 0;
+    Ok(fd_token(idx, fd.epoch))
+}
+
+/// Create a new directory at `path`. Returns Ok(()) on success.
+pub unsafe fn mkdir(path: &[u8]) -> KResult<()> {
+    if path.is_empty() || path[0] != b'/' {
+        return Err(Errno::Inval);
+    }
+    let (parent_path, dirname) = split_parent(path);
+    if dirname.is_empty() {
+        return Err(Errno::Inval);
+    }
+    let mut st = onyxfs::OnyfsStat::default();
+    let parent_ino = if parent_path.is_empty() {
+        onyx_core::formats::ONYFS_ROOT_INO
+    } else {
+        onyxfs::lookup(parent_path, &mut st)?
+    };
+    onyxfs::mkdir(parent_ino, dirname)?;
+    Ok(())
+}
+
 pub unsafe fn stat(token: FdToken, size_out: &mut u32) -> KResult<()> {
     let fd = fd_check(token)?;
     *size_out = fd.size;

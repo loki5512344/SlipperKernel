@@ -19,11 +19,16 @@ fn syscall_allowed(nr: u64, ring: u8) -> bool {
         // Available to all (ring 2 = user):
         SYS_write | SYS_read | SYS_exit | SYS_yield | SYS_getpid | SYS_sbrk | SYS_open
         | SYS_close | SYS_lseek | SYS_stat | SYS_exec | SYS_readdir | SYS_getring
-        | SYS_dropring => true,
+        | SYS_dropring | SYS_sigmask | SYS_write_fd => true,
         // Root-only (ring 0 or 1):
-        SYS_spawn | SYS_wait | SYS_snapshot_create | SYS_snapshot_rollback | SYS_snapshot_list => {
-            ring <= proc::PROC_RING_ROOT
-        }
+        SYS_spawn
+        | SYS_wait
+        | SYS_snapshot_create
+        | SYS_snapshot_rollback
+        | SYS_snapshot_list
+        | SYS_kill
+        | SYS_create
+        | SYS_mkdir => ring <= proc::PROC_RING_ROOT,
         // Stubbed:
         SYS_brk | SYS_mmap => false,
         _ => false,
@@ -56,13 +61,18 @@ pub unsafe fn handle(tf: &mut TrapFrame) -> i64 {
         SYS_exec => sys_exec(tf, a0),
         SYS_sbrk => sys_sbrk(a0 as i64),
         SYS_spawn => sys_spawn(a0, a1 as u8),
-        SYS_wait => sys_wait(a0),
+        SYS_wait => sys_wait(tf, a0),
         SYS_readdir => sys_readdir(a0, a1, a2),
         SYS_getring => sys_getring(),
         SYS_dropring => sys_dropring(a0 as u8),
         SYS_snapshot_create => sys_snapshot_create(a0),
         SYS_snapshot_rollback => sys_snapshot_rollback(a0 as u32),
         SYS_snapshot_list => sys_snapshot_list(a0, a1),
+        SYS_kill => sys_kill(a0 as u32, a1 as u32),
+        SYS_sigmask => sys_sigmask(a0 as u32, a1 as u32),
+        SYS_write_fd => sys_write_fd(a0, a1, a2),
+        SYS_create => sys_create(a0, a1, a2),
+        SYS_mkdir => sys_mkdir(a0),
         SYS_brk | SYS_mmap => Errno::NoSys.as_i64(),
         _ => Errno::NoSys.as_i64(),
     }
@@ -305,14 +315,14 @@ unsafe fn sys_spawn(path: u64, ring_hint: u8) -> i64 {
     }
 }
 
-/// SYS_wait: wait for child exit.
-unsafe fn sys_wait(status_out: u64) -> i64 {
+/// SYS_wait: wait for child exit. Blocks (yields) until a child exits.
+unsafe fn sys_wait(tf: &mut TrapFrame, status_out: u64) -> i64 {
     let status_ptr = if status_out != 0 && user_ptr_ok(status_out, 4) {
         status_out as *mut i32
     } else {
         core::ptr::null_mut()
     };
-    match proc::wait(status_ptr) {
+    match proc::wait(tf, status_ptr) {
         Ok(pid) => pid as i64,
         Err(e) => e.as_i64(),
     }
@@ -406,6 +416,104 @@ unsafe fn sys_snapshot_list(buf: u64, len: u64) -> i64 {
     }
     match crate::fs::onyxfs::snapshot_list(buf as *mut u8, len as usize) {
         Ok(count) => count as i64,
+        Err(e) => e.as_i64(),
+    }
+}
+
+// ── Signal syscalls ───────────────────────────────────────────────────────
+
+/// SYS_kill(pid, signal): deliver `signal` to process `pid`.
+/// Root-only (ACL enforced in `syscall_allowed`).
+unsafe fn sys_kill(pid: u32, signal: u32) -> i64 {
+    match proc::signal_send(pid, signal) {
+        Ok(()) => 0,
+        Err(e) => e.as_i64(),
+    }
+}
+
+/// SYS_sigmask(how, sig): block / unblock / set the signal mask for one
+/// signal. `how`: 0 = block, 1 = unblock, 2 = set mask to just `sig`.
+/// Signal 9 (KILL) cannot be blocked — `how == 0` on signal 9 is a no-op.
+unsafe fn sys_sigmask(how: u32, sig: u32) -> i64 {
+    if sig >= 32 {
+        return Errno::Inval.as_i64();
+    }
+    let p = proc::current();
+    match how {
+        0 => {
+            // Block — but KILL cannot be blocked.
+            if sig != proc::SIG_KILL {
+                p.signal_mask |= 1u32 << sig;
+            }
+        }
+        1 => {
+            p.signal_mask &= !(1u32 << sig);
+        }
+        2 => {
+            // Set mask to exactly {sig} (plus KILL-ignoring: KILL still
+            // cannot be blocked, so don't add it).
+            let mut m = 0u32;
+            if sig != proc::SIG_KILL {
+                m = 1u32 << sig;
+            }
+            p.signal_mask = m;
+        }
+        _ => return Errno::Inval.as_i64(),
+    }
+    0
+}
+
+// ── File write / create / mkdir syscalls ──────────────────────────────────
+
+/// SYS_write_fd(fd, buf, len): write `len` bytes from user buffer `buf` to
+/// the open file referred to by the capability fd `fd`. Returns the number
+/// of bytes written (or a negative errno).
+unsafe fn sys_write_fd(token: u64, buf: u64, len: u64) -> i64 {
+    if !user_ptr_ok(buf, len) {
+        return Errno::Inval.as_i64();
+    }
+    match vfs::write(token, buf as *const u8, len as u32) {
+        Ok(n) => n as i64,
+        Err(e) => e.as_i64(),
+    }
+}
+
+/// SYS_create(path, mode, _reserved): create a new regular file at `path`
+/// with the given OnyxFS mode bits and return a writable fd token.
+unsafe fn sys_create(path: u64, mode: u64, _reserved: u64) -> i64 {
+    if !user_ptr_ok(path, 1) {
+        return Errno::Inval.as_i64();
+    }
+    let mut len = 0usize;
+    let p = path as *const u8;
+    while *p.add(len) != 0 && len < 256 {
+        len += 1;
+    }
+    let path_bytes = core::slice::from_raw_parts(p, len);
+    let mode_u32 = if mode == 0 {
+        onyx_core::formats::ONYFS_DT_REG
+    } else {
+        mode as u32
+    };
+    match vfs::create(path_bytes, mode_u32) {
+        Ok(token) => token as i64,
+        Err(e) => e.as_i64(),
+    }
+}
+
+/// SYS_mkdir(path): create a new directory at `path`.
+unsafe fn sys_mkdir(path: u64) -> i64 {
+    if !user_ptr_ok(path, 1) {
+        return Errno::Inval.as_i64();
+    }
+    let mut len = 0usize;
+    let p = path as *const u8;
+    while *p.add(len) != 0 && len < 256 {
+        len += 1;
+    }
+    let path_bytes = core::slice::from_raw_parts(p, len);
+    match vfs::mkdir(path_bytes) {
+        Ok(()) => 0,
         Err(e) => e.as_i64(),
     }
 }

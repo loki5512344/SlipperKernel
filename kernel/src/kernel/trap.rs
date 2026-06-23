@@ -97,6 +97,9 @@ pub unsafe fn handle(tf: &mut TrapFrame) {
             }
         }
     }
+    // Signal delivery: check the current process for pending unblocked
+    // signals. KILL terminates the process; other signals are cleared (MVP).
+    proc::signal_check(tf);
     let pid = proc::current_pid();
     if pid != 0 {
         if let Some(p) = proc::by_pid(pid) {

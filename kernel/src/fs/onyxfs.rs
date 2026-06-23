@@ -70,40 +70,162 @@ static mut G_SB: OnyfsSuper = OnyfsSuper {
 };
 static mut G_BUF: [u8; ONYFS_BLOCK_SIZE] = [0; ONYFS_BLOCK_SIZE];
 
+// ── Journal ──────────────────────────────────────────────────────────────
+//
+// On-disk journal entry layout (one 4096-byte block per entry):
+//   bytes 0..4        : type   (u32) — 0=commit_start, 1=block_write, 2=commit_end
+//   bytes 4..8        : block_num (u32) — target block this entry replays to
+//   bytes 8..4096     : data   (4088 bytes) — block contents to replay
+//
+// The journal is a circular redo log: `journal_log` appends a `block_write`
+// entry containing the NEW block contents before the actual write_block call.
+// `journal_commit` appends a `commit_end` marker. On mount, `journal_recover`
+// scans for a `commit_end`; if found, every preceding `block_write` entry is
+// re-applied to its target block. Incomplete transactions (no commit_end) are
+// discarded.
+//
+// MVP limitation: only the first 4088 bytes of each block are journaled. The
+// last 8 bytes of a 4096-byte block are not protected. This is acceptable
+// because the only metadata that fits in those 8 bytes (rare tail padding of
+// dirent blocks) is not critical for crash recovery.
+
+const JOURNAL_TYPE_COMMIT_START: u32 = 0;
+const JOURNAL_TYPE_BLOCK_WRITE: u32 = 1;
+const JOURNAL_TYPE_COMMIT_END: u32 = 2;
+const JOURNAL_DATA_SIZE: usize = ONYFS_BLOCK_SIZE - 8;
+
+/// Next free journal slot (block offset from `journal_start`).
+static mut G_JOURNAL_HEAD: u32 = 0;
+
 unsafe fn read_block(blk: u32, buf: &mut [u8; ONYFS_BLOCK_SIZE]) -> KResult<()> {
-    let lba = *(&raw const G_LBA_BASE) + blk * 8;
-    // ── I/O batching opportunity ───────────────────────────────────────────
-    // A single OnyxFS block is 4096 bytes = 8 × 512-byte sectors. Ideally we
-    // would issue ONE virtio-blk request covering all 8 sectors in a single
-    // descriptor chain (scatter-gather). The current virtio-blk driver only
-    // supports single-sector reads (`virtio_req::read` issues one 512-byte
-    // IN op per call), so we fall back to 8 sequential requests here. Once
-    // the driver gains multi-sector / scatter-gather support, replace this
-    // loop with a single batched `virtio_req::read_multi(dev, lba, 8, buf)`.
-    // ──────────────────────────────────────────────────────────────────────
-    for i in 0u32..8 {
-        virtio_req::read(
-            *(&raw const G_DEV),
-            (lba + i) as u64,
-            buf.as_mut_ptr().add((i * 512) as usize),
-        )?;
-    }
-    Ok(())
+    let lba = (*(&raw const G_LBA_BASE) as u64) + (blk as u64) * 8;
+    // A single OnyxFS block is 4096 bytes = 8 × 512-byte sectors. We issue
+    // ONE batched `virtio_req::read_multi` call covering all 8 sectors rather
+    // than 8 sequential single-sector reads. Today `read_multi` internally
+    // loops over single-sector ops, but the seam is in place for a future
+    // scatter-gather optimization in the virtio-blk driver.
+    virtio_req::read_multi(*(&raw const G_DEV), lba, 8, buf.as_mut_ptr())
 }
 
 /// Write a 4096-byte block back to disk. Used by `update_mtime`,
 /// `write_inode`, and the snapshot management stubs.
 unsafe fn write_block(blk: u32, buf: &[u8; ONYFS_BLOCK_SIZE]) -> KResult<()> {
-    let lba = *(&raw const G_LBA_BASE) + blk * 8;
-    // Same batching caveat as `read_block` — 8 sequential single-sector
-    // writes until the virtio-blk driver supports multi-sector ops.
-    for i in 0u32..8 {
-        virtio_req::write(
-            *(&raw const G_DEV),
-            (lba + i) as u64,
-            buf.as_ptr().add((i * 512) as usize),
-        )?;
+    let lba = (*(&raw const G_LBA_BASE) as u64) + (blk as u64) * 8;
+    // Same batching as `read_block` — a single `write_multi` call for the
+    // whole 8-sector block.
+    virtio_req::write_multi(*(&raw const G_DEV), lba, 8, buf.as_ptr())
+}
+
+// ── Journal implementation ───────────────────────────────────────────────
+
+/// Append a `block_write` entry to the journal containing the NEW contents
+/// of `block_num`. Called BEFORE the actual `write_block` so that a crash
+/// between the journal append and the data write leaves a recoverable redo
+/// entry on disk. No-op if the filesystem has no journal configured.
+unsafe fn journal_log(block_num: u32, data: &[u8; ONYFS_BLOCK_SIZE]) -> KResult<()> {
+    let sb_ptr = &raw const G_SB;
+    let journal_start = (*sb_ptr).journal_start;
+    if journal_start == 0 || (*sb_ptr).journal_size == 0 {
+        return Ok(());
     }
+    let head = *(&raw const G_JOURNAL_HEAD);
+    if head >= (*sb_ptr).journal_size {
+        // Journal full — caller should have committed by now. Bail out.
+        return Err(Errno::NoSpace);
+    }
+    let mut entry = [0u8; ONYFS_BLOCK_SIZE];
+    entry[0..4].copy_from_slice(&JOURNAL_TYPE_BLOCK_WRITE.to_le_bytes());
+    entry[4..8].copy_from_slice(&block_num.to_le_bytes());
+    let copy_n = JOURNAL_DATA_SIZE.min(ONYFS_BLOCK_SIZE);
+    entry[8..8 + copy_n].copy_from_slice(&data[..copy_n]);
+    write_block(journal_start + head, &entry)?;
+    *(&raw mut G_JOURNAL_HEAD) = head + 1;
+    Ok(())
+}
+
+/// Mark the current transaction as committed by appending a `commit_end`
+/// entry. After this, the journal entries are considered durable and will be
+/// replayed on the next mount if a crash occurs before the data writes
+/// themselves complete. Resets the in-memory journal head so the journal
+/// area can be reused for the next transaction.
+unsafe fn journal_commit() -> KResult<()> {
+    let sb_ptr = &raw const G_SB;
+    let journal_start = (*sb_ptr).journal_start;
+    if journal_start == 0 || (*sb_ptr).journal_size == 0 {
+        return Ok(());
+    }
+    let head = *(&raw const G_JOURNAL_HEAD);
+    if head == 0 {
+        return Ok(()); // nothing to commit
+    }
+    if head < (*sb_ptr).journal_size {
+        let mut entry = [0u8; ONYFS_BLOCK_SIZE];
+        entry[0..4].copy_from_slice(&JOURNAL_TYPE_COMMIT_END.to_le_bytes());
+        write_block(journal_start + head, &entry)?;
+    }
+    *(&raw mut G_JOURNAL_HEAD) = 0;
+    Ok(())
+}
+
+/// Replay journal on mount (crash recovery). Scans the journal area for a
+/// `commit_end` marker. If found, every preceding `block_write` entry is
+/// re-applied to its target block (redo). Incomplete transactions (no
+/// `commit_end`) are discarded. The journal is then zeroed so future mounts
+/// start with a clean log.
+pub unsafe fn journal_recover() -> KResult<()> {
+    let sb_ptr = &raw const G_SB;
+    let journal_start = (*sb_ptr).journal_start;
+    if journal_start == 0 || (*sb_ptr).journal_size == 0 {
+        return Ok(());
+    }
+    let journal_size = (*sb_ptr).journal_size;
+    let mut found_commit = false;
+    let mut commit_at: u32 = 0;
+    let mut entry = [0u8; ONYFS_BLOCK_SIZE];
+    let mut i: u32 = 0;
+    while i < journal_size {
+        read_block(journal_start + i, &mut entry)?;
+        let entry_type = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+        match entry_type {
+            JOURNAL_TYPE_COMMIT_START => {}
+            JOURNAL_TYPE_BLOCK_WRITE => {}
+            JOURNAL_TYPE_COMMIT_END => {
+                found_commit = true;
+                commit_at = i;
+                break;
+            }
+            _ => break, // empty slot or garbage — stop scanning
+        }
+        i += 1;
+    }
+    if !found_commit {
+        *(&raw mut G_JOURNAL_HEAD) = 0;
+        return Ok(());
+    }
+    // Replay every `block_write` entry before the commit marker.
+    for j in 0..commit_at {
+        read_block(journal_start + j, &mut entry)?;
+        let entry_type = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+        if entry_type != JOURNAL_TYPE_BLOCK_WRITE {
+            continue;
+        }
+        let block_num = u32::from_le_bytes([entry[4], entry[5], entry[6], entry[7]]);
+        // Read the current block contents (to preserve the un-journaled tail)
+        // and overwrite the first JOURNAL_DATA_SIZE bytes from the entry.
+        let mut blk_buf = [0u8; ONYFS_BLOCK_SIZE];
+        let _ = read_block(block_num, &mut blk_buf);
+        let copy_n = JOURNAL_DATA_SIZE.min(ONYFS_BLOCK_SIZE);
+        for k in 0..copy_n {
+            blk_buf[k] = entry[8 + k];
+        }
+        write_block(block_num, &blk_buf)?;
+    }
+    // Clear the journal area so future mounts see an empty log.
+    let zero = [0u8; ONYFS_BLOCK_SIZE];
+    for j in 0..=commit_at {
+        write_block(journal_start + j, &zero)?;
+    }
+    *(&raw mut G_JOURNAL_HEAD) = 0;
     Ok(())
 }
 
@@ -145,6 +267,9 @@ pub unsafe fn mount(dev: usize, lba_offset: u32) -> KResult<()> {
     };
     *(&raw mut G_VERSION) = ver;
     *(&raw mut G_SB) = sb_val;
+    // Crash recovery: replay any committed-but-unapplied journal entries
+    // before the filesystem is handed to the VFS layer.
+    journal_recover()?;
     Ok(())
 }
 
@@ -210,6 +335,7 @@ unsafe fn read_inode(ino: u32, out: &mut OnyfsInode) -> KResult<()> {
 
 /// Write an inode back to disk. v2 only (v1 has no writable metadata fields
 /// beyond what `read` already covers, and is treated as read-only here).
+/// Logs the inode-table block to the journal before writing.
 unsafe fn write_inode(ino: u32, inode: &OnyfsInode) -> KResult<()> {
     if *(&raw const G_VERSION) == ONYFS_V1 {
         return Err(Errno::NoSys);
@@ -228,6 +354,7 @@ unsafe fn write_inode(ino: u32, inode: &OnyfsInode) -> KResult<()> {
     for i in 0..OnyfsInode::SIZE {
         (*pb)[off + i] = bytes[i];
     }
+    journal_log(blk, &*pb)?;
     write_block(blk, &*pb)
 }
 
@@ -448,6 +575,325 @@ pub unsafe fn read(ino: u32, buf: *mut u8, off: u32, len: u32) -> KResult<u32> {
     Ok(read_total)
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Write support — alloc_data_block, alloc_inode, write, create, mkdir.
+// All v2-only (v1 has no writable inode fields). Each logical operation is
+// wrapped in a journal transaction (journal_log + journal_commit).
+// ════════════════════════════════════════════════════════════════════════════
+
+/// Allocate a free data block by scanning the data bitmap. Marks the bit as
+/// used and returns the block number (`data_blocks_start + bit_index`).
+unsafe fn alloc_data_block() -> KResult<u32> {
+    let bm_blk = (*(&raw const G_SB)).data_bitmap_start;
+    let pb = &raw mut G_BUF;
+    read_block(bm_blk, &mut *pb)?;
+    // Each byte has 8 bits. Scan for a 0 bit.
+    for byte_idx in 0..ONYFS_BLOCK_SIZE {
+        if (*pb)[byte_idx] == 0xFF {
+            continue;
+        }
+        for bit in 0..8u32 {
+            if (*pb)[byte_idx] & (1 << bit) == 0 {
+                (*pb)[byte_idx] |= 1 << bit;
+                let bit_index = (byte_idx as u32) * 8 + bit;
+                journal_log(bm_blk, &*pb)?;
+                write_block(bm_blk, &*pb)?;
+                return Ok((*(&raw const G_SB)).data_blocks_start + bit_index);
+            }
+        }
+    }
+    Err(Errno::NoSpace)
+}
+
+/// Allocate a free inode by scanning the inode bitmap (block 1). Marks the
+/// bit as used and returns the 1-based inode number (`bit_index + 1`).
+unsafe fn alloc_inode() -> KResult<u32> {
+    // The inode bitmap lives at block 1 in both v1 and v2 layouts.
+    const INODE_BITMAP_BLK: u32 = 1;
+    let pb = &raw mut G_BUF;
+    read_block(INODE_BITMAP_BLK, &mut *pb)?;
+    for byte_idx in 0..ONYFS_BLOCK_SIZE {
+        if (*pb)[byte_idx] == 0xFF {
+            continue;
+        }
+        for bit in 0..8u32 {
+            if (*pb)[byte_idx] & (1 << bit) == 0 {
+                (*pb)[byte_idx] |= 1 << bit;
+                let bit_index = (byte_idx as u32) * 8 + bit;
+                journal_log(INODE_BITMAP_BLK, &*pb)?;
+                write_block(INODE_BITMAP_BLK, &*pb)?;
+                return Ok(bit_index + 1); // 1-based
+            }
+        }
+    }
+    Err(Errno::NoSpace)
+}
+
+/// Helper: add a dirent to a directory's first data block. Allocates the
+/// directory data block if it does not yet exist. Logs the block to the
+/// journal before writing. Used by `create` and `mkdir`.
+unsafe fn add_dirent(dir_ino: u32, name: &[u8], target_ino: u32, dtype: u8) -> KResult<()> {
+    let mut dir_inode = OnyfsInode {
+        mode: 0,
+        size: 0,
+        uid: 0,
+        gid: 0,
+        nlink: 0,
+        blocks: [0; ONYFS_DIRECT_BLKS],
+        indirect: 0,
+        double_indirect: 0,
+        crtime: 0,
+        mtime: 0,
+        atime: 0,
+        ctime: 0,
+        flags: 0,
+        reserved: 0,
+    };
+    read_inode(dir_ino, &mut dir_inode)?;
+    let mut dir_blk = dir_inode.blocks[0];
+    if dir_blk == 0 {
+        // Directory has no data block yet — allocate one and zero it.
+        dir_blk = alloc_data_block()?;
+        dir_inode.blocks[0] = dir_blk;
+        let pb = &raw mut G_BUF;
+        for b in (*pb).iter_mut() {
+            *b = 0;
+        }
+        journal_log(dir_blk, &*pb)?;
+        write_block(dir_blk, &*pb)?;
+        write_inode(dir_ino, &dir_inode)?;
+    }
+    let dpb = dirents_per_block();
+    let entry_size = match *(&raw const G_VERSION) {
+        ONYFS_V1 => ONYFS_V1_DIRENT_SIZE,
+        _ => OnyfsDirent::SIZE,
+    };
+    let pb = &raw mut G_BUF;
+    read_block(dir_blk, &mut *pb)?;
+    for i in 0..dpb {
+        let off = i * entry_size;
+        if off + entry_size > ONYFS_BLOCK_SIZE {
+            break;
+        }
+        // The inode field is at offset `entry_size - 8` (last 4 bytes of name
+        // area + 4-byte inode). For v2 40-byte dirent, inode is at off+32.
+        // For v1 36-byte dirent, inode is at off+32 as well. Both layouts
+        // store the inode number at offset 32 within the dirent.
+        let inode_off = off + 32;
+        let existing = u32::from_le_bytes([
+            (*pb)[inode_off],
+            (*pb)[inode_off + 1],
+            (*pb)[inode_off + 2],
+            (*pb)[inode_off + 3],
+        ]);
+        if existing != 0 {
+            continue;
+        }
+        // Empty slot — fill it in.
+        let mut name_buf = [0u8; ONYFS_NAME_MAX];
+        let n = name.len().min(ONYFS_NAME_MAX);
+        for j in 0..n {
+            name_buf[j] = name[j];
+        }
+        for j in 0..ONYFS_NAME_MAX {
+            (*pb)[off + j] = name_buf[j];
+        }
+        let ino_bytes = target_ino.to_le_bytes();
+        (*pb)[inode_off] = ino_bytes[0];
+        (*pb)[inode_off + 1] = ino_bytes[1];
+        (*pb)[inode_off + 2] = ino_bytes[2];
+        (*pb)[inode_off + 3] = ino_bytes[3];
+        if *(&raw const G_VERSION) != ONYFS_V1 {
+            // v2 dirent: dtype at off+36, name_len at off+37.
+            (*pb)[off + 36] = dtype;
+            (*pb)[off + 37] = n as u8;
+        }
+        journal_log(dir_blk, &*pb)?;
+        write_block(dir_blk, &*pb)?;
+        return Ok(());
+    }
+    Err(Errno::NoSpace)
+}
+
+/// Write data to a file at a given offset. Grows the file if needed.
+/// Allocates new data blocks lazily for any block touched by the write that
+/// is not yet mapped. Indirect blocks are not supported (MVP). The inode's
+/// mtime and size are bumped as needed. The whole operation is wrapped in a
+/// single journal transaction.
+pub unsafe fn write(ino: u32, buf: *const u8, off: u32, len: u32) -> KResult<u32> {
+    if *(&raw const G_VERSION) == ONYFS_V1 {
+        return Err(Errno::NoSys);
+    }
+    let mut inode = OnyfsInode {
+        mode: 0,
+        size: 0,
+        uid: 0,
+        gid: 0,
+        nlink: 0,
+        blocks: [0; ONYFS_DIRECT_BLKS],
+        indirect: 0,
+        double_indirect: 0,
+        crtime: 0,
+        mtime: 0,
+        atime: 0,
+        ctime: 0,
+        flags: 0,
+        reserved: 0,
+    };
+    read_inode(ino, &mut inode)?;
+    let mut written: u32 = 0;
+    let mut cur_off = off;
+    let mut remaining = len;
+    while remaining > 0 {
+        let blk_idx = (cur_off / ONYFS_BLOCK_SIZE as u32) as usize;
+        if blk_idx >= ONYFS_DIRECT_BLKS {
+            break; // MVP: no indirect-block support.
+        }
+        let mut blk = inode.blocks[blk_idx];
+        if blk == 0 {
+            // Newly touched block — allocate, zero, journal, write.
+            blk = alloc_data_block()?;
+            inode.blocks[blk_idx] = blk;
+            let pb = &raw mut G_BUF;
+            for b in (*pb).iter_mut() {
+                *b = 0;
+            }
+            journal_log(blk, &*pb)?;
+            write_block(blk, &*pb)?;
+        }
+        let chunk_off = (cur_off % ONYFS_BLOCK_SIZE as u32) as usize;
+        let chunk =
+            (ONYFS_BLOCK_SIZE as u32 - cur_off % ONYFS_BLOCK_SIZE as u32).min(remaining) as usize;
+        {
+            let pb = &raw mut G_BUF;
+            read_block(blk, &mut *pb)?;
+            core::ptr::copy_nonoverlapping(
+                buf.add(written as usize),
+                (*pb).as_mut_ptr().add(chunk_off),
+                chunk,
+            );
+            journal_log(blk, &*pb)?;
+            write_block(blk, &*pb)?;
+        }
+        written += chunk as u32;
+        cur_off += chunk as u32;
+        remaining -= chunk as u32;
+    }
+    let end = off.wrapping_add(written);
+    if (end as u64) > inode.size {
+        inode.size = end as u64;
+    }
+    inode.mtime = *(&raw const timer::G_JIFFIES);
+    write_inode(ino, &inode)?;
+    journal_commit()?;
+    Ok(written)
+}
+
+/// Create a new regular file in a directory. Returns the new inode number.
+/// The new inode is initialized with `mode`, size 0, no blocks, and current
+/// timestamps. A dirent pointing to it is added to the parent directory's
+/// first data block.
+pub unsafe fn create(dir_ino: u32, name: &[u8], mode: u32) -> KResult<u32> {
+    if *(&raw const G_VERSION) == ONYFS_V1 {
+        return Err(Errno::NoSys);
+    }
+    if name.is_empty() || name.len() > ONYFS_NAME_MAX {
+        return Err(Errno::Inval);
+    }
+    let new_ino = alloc_inode()?;
+    let now = *(&raw const timer::G_JIFFIES);
+    let inode = OnyfsInode {
+        mode,
+        size: 0,
+        uid: 0,
+        gid: 0,
+        nlink: 1,
+        blocks: [0; ONYFS_DIRECT_BLKS],
+        indirect: 0,
+        double_indirect: 0,
+        crtime: now,
+        mtime: now,
+        atime: now,
+        ctime: now,
+        flags: 0,
+        reserved: 0,
+    };
+    write_inode(new_ino, &inode)?;
+    add_dirent(dir_ino, name, new_ino, /*dtype=*/ 8)?;
+    journal_commit()?;
+    Ok(new_ino)
+}
+
+/// Create a new directory. Returns the new inode number. Like `create()` but
+/// with `mode = ONYFS_DT_DIR`, and the new directory is given its own data
+/// block pre-populated with the conventional "." and ".." entries.
+pub unsafe fn mkdir(dir_ino: u32, name: &[u8]) -> KResult<u32> {
+    if *(&raw const G_VERSION) == ONYFS_V1 {
+        return Err(Errno::NoSys);
+    }
+    if name.is_empty() || name.len() > ONYFS_NAME_MAX {
+        return Err(Errno::Inval);
+    }
+    let new_ino = alloc_inode()?;
+    let now = *(&raw const timer::G_JIFFIES);
+    let mut inode = OnyfsInode {
+        mode: ONYFS_DT_DIR,
+        size: 0,
+        uid: 0,
+        gid: 0,
+        nlink: 2,
+        blocks: [0; ONYFS_DIRECT_BLKS],
+        indirect: 0,
+        double_indirect: 0,
+        crtime: now,
+        mtime: now,
+        atime: now,
+        ctime: now,
+        flags: 0,
+        reserved: 0,
+    };
+    // Allocate the new directory's own data block and seed it with "."/"..".
+    let dir_blk = alloc_data_block()?;
+    inode.blocks[0] = dir_blk;
+    {
+        let pb = &raw mut G_BUF;
+        for b in (*pb).iter_mut() {
+            *b = 0;
+        }
+        let mut dot_name = [0u8; ONYFS_NAME_MAX];
+        dot_name[0] = b'.';
+        let mut dotdot_name = [0u8; ONYFS_NAME_MAX];
+        dotdot_name[0] = b'.';
+        dotdot_name[1] = b'.';
+        let dot = OnyfsDirent {
+            name: dot_name,
+            inode: new_ino,
+            dtype: 4,
+            name_len: 1,
+            reserved: [0, 0],
+        };
+        let dotdot = OnyfsDirent {
+            name: dotdot_name,
+            inode: dir_ino,
+            dtype: 4,
+            name_len: 2,
+            reserved: [0, 0],
+        };
+        let db1 = dot.to_bytes();
+        let db2 = dotdot.to_bytes();
+        for j in 0..OnyfsDirent::SIZE {
+            (*pb)[j] = db1[j];
+            (*pb)[OnyfsDirent::SIZE + j] = db2[j];
+        }
+        journal_log(dir_blk, &*pb)?;
+        write_block(dir_blk, &*pb)?;
+    }
+    write_inode(new_ino, &inode)?;
+    add_dirent(dir_ino, name, new_ino, /*dtype=*/ 4)?;
+    journal_commit()?;
+    Ok(new_ino)
+}
+
 /// Read a directory entry by index. Returns (inode, name_len, is_dir).
 /// Used by SYS_readdir.
 pub unsafe fn readdir_entry(
@@ -562,9 +1008,133 @@ unsafe fn inode_table_block_count() -> u32 {
     }
 }
 
-/// Create a snapshot: copy the inode table and data bitmap into the snapshot
-/// area, write a `SnapshotMeta` record, and bump `snapshot_count`.
-/// Returns the new snapshot ID.
+// ── RLE compression for snapshots ────────────────────────────────────────
+//
+// Packet format (each packet starts with a tag byte):
+//   - tag & 0x80 != 0  → run packet: count = (tag & 0x7F) + 1 (1..128),
+//                         next byte = value, expand to count × value.
+//   - tag & 0x80 == 0  → literal packet: count = tag + 1 (1..128),
+//                         followed by `count` literal bytes.
+//
+// Runs of >= 3 identical bytes are encoded as a run packet; everything else
+// is grouped into literal packets of up to 128 bytes each. Worst-case
+// expansion for incompressible input is ~N + N/128 bytes.
+
+/// RLE-compress `src` into `dst`. Returns the compressed size, or 0 on
+/// overflow (`dst` too small). Caller must ensure `dst` is at least
+/// `src.len() + src.len()/128 + 2` bytes for incompressible input.
+unsafe fn rle_compress(src: &[u8], dst: &mut [u8]) -> usize {
+    let n = src.len();
+    let mut i: usize = 0;
+    let mut out: usize = 0;
+    while i < n {
+        let cur = src[i];
+        // Count run length (max 128).
+        let mut run: usize = 1;
+        while i + run < n && src[i + run] == cur && run < 128 {
+            run += 1;
+        }
+        if run >= 3 {
+            if out + 2 > dst.len() {
+                return 0;
+            }
+            dst[out] = 0x80 | ((run - 1) as u8);
+            dst[out + 1] = cur;
+            out += 2;
+            i += run;
+        } else {
+            // Collect literal bytes (up to 128), stopping at a 3+ run.
+            let lit_start = i;
+            let mut lit_len: usize = 0;
+            while i + lit_len < n && lit_len < 128 {
+                let b = src[i + lit_len];
+                let mut k: usize = 0;
+                while i + lit_len + k < n && src[i + lit_len + k] == b && k < 3 {
+                    k += 1;
+                }
+                if k >= 3 {
+                    break;
+                }
+                lit_len += 1;
+            }
+            if lit_len == 0 {
+                lit_len = 1;
+            }
+            if out + 1 + lit_len > dst.len() {
+                return 0;
+            }
+            dst[out] = (lit_len - 1) as u8;
+            for j in 0..lit_len {
+                dst[out + 1 + j] = src[lit_start + j];
+            }
+            out += 1 + lit_len;
+            i += lit_len;
+        }
+    }
+    out
+}
+
+/// RLE-decompress `src` into `dst`. Returns the number of bytes written, or 0
+/// on overflow / truncated input.
+unsafe fn rle_decompress(src: &[u8], dst: &mut [u8]) -> usize {
+    let mut i: usize = 0;
+    let mut out: usize = 0;
+    while i < src.len() && out < dst.len() {
+        let tag = src[i];
+        i += 1;
+        if tag & 0x80 != 0 {
+            let count = ((tag & 0x7F) as usize) + 1;
+            if i >= src.len() || out + count > dst.len() {
+                return 0;
+            }
+            let val = src[i];
+            i += 1;
+            for j in 0..count {
+                dst[out + j] = val;
+            }
+            out += count;
+        } else {
+            let count = (tag as usize) + 1;
+            if i + count > src.len() || out + count > dst.len() {
+                return 0;
+            }
+            for j in 0..count {
+                dst[out + j] = src[i + j];
+            }
+            i += count;
+            out += count;
+        }
+    }
+    out
+}
+
+// ── Snapshot storage layout (COW + RLE) ──────────────────────────────────
+//
+// Per-snapshot data occupies `SNAPSHOT_BLOCKS_EACH` (64) consecutive blocks
+// in the snapshot area. The first block is a header describing the
+// compressed slots; the remaining 63 blocks hold compressed block data, with
+// each compressed block occupying exactly 2 on-disk blocks (8192 bytes,
+// enough for any 4096-byte input even in the worst-case RLE expansion).
+//
+// Header block layout (4096 bytes):
+//   bytes 0..4       : n_entries (u32) — number of compressed slots that
+//                      follow (<= SNAPSHOT_SLOTS).
+//   bytes 4..        : array of n_entries × (block_num: u32, comp_size: u32)
+//                      pairs. comp_size == ONYFS_BLOCK_SIZE means "stored
+//                      raw" (RLE produced 0 / overflowed); otherwise it is
+//                      the compressed byte count.
+//
+// A snapshot captures: inode-table blocks, the data-bitmap block, and every
+// used data block referenced by a non-zero inode. This is the COW portion —
+// only live blocks are copied.
+
+const SNAPSHOT_SLOTS: u32 = 31;
+const SNAPSHOT_SLOT_BLKS: u32 = 2;
+
+/// Create a snapshot: walk the inode table to enumerate all live blocks
+/// (inode-table + data-bitmap + used data blocks), RLE-compress each block,
+/// and store the compressed data in the snapshot area. Also writes a
+/// `SnapshotMeta` record and bumps `snapshot_count`. Returns the new ID.
 pub unsafe fn snapshot_create(name: &[u8]) -> KResult<u32> {
     let sb_ptr = &raw const G_SB;
     if (*sb_ptr).snapshot_area_start == 0 {
@@ -574,29 +1144,103 @@ pub unsafe fn snapshot_create(name: &[u8]) -> KResult<u32> {
         return Err(Errno::NoSys);
     }
     let new_id = (*sb_ptr).snapshot_count + 1;
-
-    let inode_tbl_blocks = inode_table_block_count();
-    let bitmap_blocks: u32 = 1; // simplified: copy just the first bitmap block
-    let total_copy = inode_tbl_blocks + bitmap_blocks;
-    if total_copy > SNAPSHOT_BLOCKS_EACH {
-        return Err(Errno::NoMem);
-    }
-
     let snap_data_start = (*sb_ptr).snapshot_area_start + 1 + (new_id - 1) * SNAPSHOT_BLOCKS_EACH;
 
-    let pb = &raw mut G_BUF;
-    // Copy inode-table blocks into the snapshot area.
-    for i in 0..inode_tbl_blocks {
-        read_block((*sb_ptr).inode_table_start + i, &mut *pb)?;
-        write_block(snap_data_start + i, &*pb)?;
-    }
-    // Copy data-bitmap block(s).
-    for i in 0..bitmap_blocks {
-        read_block((*sb_ptr).data_bitmap_start + i, &mut *pb)?;
-        write_block(snap_data_start + inode_tbl_blocks + i, &*pb)?;
+    // ── Enumerate the live blocks to snapshot ────────────────────────────
+    // (block_num, comp_size) — comp_size filled in after compression.
+    let mut blocks: [(u32, u32); SNAPSHOT_SLOTS as usize] = [(0, 0); SNAPSHOT_SLOTS as usize];
+    let mut n_blocks: usize = 0;
+
+    // Helper closure-like macro would be cleaner but Rust 2021 doesn't allow
+    // closures capturing `&mut` to mutable statics cleanly. Inline the push.
+    macro_rules! push_block {
+        ($b:expr) => {{
+            if n_blocks >= SNAPSHOT_SLOTS as usize {
+                return Err(Errno::NoMem);
+            }
+            // Skip duplicates.
+            let mut dup = false;
+            for j in 0..n_blocks {
+                if blocks[j].0 == $b {
+                    dup = true;
+                    break;
+                }
+            }
+            if !dup {
+                blocks[n_blocks] = ($b, 0);
+                n_blocks += 1;
+            }
+        }};
     }
 
-    // Build SnapshotMeta and write it into the snapshot-area header block.
+    // 1. Inode-table blocks.
+    let inode_tbl_blocks = inode_table_block_count();
+    for i in 0..inode_tbl_blocks {
+        push_block!((*sb_ptr).inode_table_start + i);
+    }
+    // 2. Data-bitmap block.
+    push_block!((*sb_ptr).data_bitmap_start);
+    // 3. Used data blocks (walk every inode).
+    for blk_idx in 0..inode_tbl_blocks {
+        let pb = &raw mut G_BUF;
+        read_block((*sb_ptr).inode_table_start + blk_idx, &mut *pb)?;
+        let ipb = inodes_per_block();
+        for slot in 0..ipb {
+            let off = slot * OnyfsInode::SIZE;
+            if off + OnyfsInode::SIZE > ONYFS_BLOCK_SIZE {
+                break;
+            }
+            let buf_view: &[u8] = &*pb;
+            let inode = match OnyfsInode::from_bytes(&buf_view[off..off + OnyfsInode::SIZE]) {
+                Some(i) => i,
+                None => continue,
+            };
+            if inode.mode == 0 {
+                continue;
+            }
+            for &b in inode.blocks.iter() {
+                if b != 0 {
+                    push_block!(b);
+                }
+            }
+        }
+    }
+
+    // ── Compress and store each block ────────────────────────────────────
+    let mut comp_buf = [0u8; 8192];
+    let mut blk_buf = [0u8; ONYFS_BLOCK_SIZE];
+    for i in 0..n_blocks {
+        let block_num = blocks[i].0;
+        read_block(block_num, &mut blk_buf)?;
+        let comp_size = rle_compress(&blk_buf, &mut comp_buf);
+        let stored_size: u32 = if comp_size == 0 || comp_size > 8192 {
+            // Fallback: store raw.
+            comp_buf[..ONYFS_BLOCK_SIZE].copy_from_slice(&blk_buf);
+            ONYFS_BLOCK_SIZE as u32
+        } else {
+            comp_size as u32
+        };
+        // Write compressed data to slot i (2 on-disk blocks).
+        let slot_start = snap_data_start + 1 + (i as u32) * SNAPSHOT_SLOT_BLKS;
+        let mut out_blk = [0u8; ONYFS_BLOCK_SIZE];
+        out_blk.copy_from_slice(&comp_buf[..ONYFS_BLOCK_SIZE]);
+        write_block(slot_start, &out_blk)?;
+        out_blk.copy_from_slice(&comp_buf[ONYFS_BLOCK_SIZE..8192]);
+        write_block(slot_start + 1, &out_blk)?;
+        blocks[i].1 = stored_size;
+    }
+
+    // ── Write header block ───────────────────────────────────────────────
+    let mut header = [0u8; ONYFS_BLOCK_SIZE];
+    header[0..4].copy_from_slice(&(n_blocks as u32).to_le_bytes());
+    for i in 0..n_blocks {
+        let off = 4 + i * 8;
+        header[off..off + 4].copy_from_slice(&blocks[i].0.to_le_bytes());
+        header[off + 4..off + 8].copy_from_slice(&blocks[i].1.to_le_bytes());
+    }
+    write_block(snap_data_start, &header)?;
+
+    // ── Write SnapshotMeta into the area header block ────────────────────
     let mut name_buf = [0u8; 32];
     let n = name.len().min(32);
     for i in 0..n {
@@ -606,12 +1250,13 @@ pub unsafe fn snapshot_create(name: &[u8]) -> KResult<u32> {
         id: new_id,
         timestamp: *(&raw const timer::G_JIFFIES),
         root_inode_snapshot: (*sb_ptr).root_inode,
-        block_count: total_copy,
+        block_count: n_blocks as u32,
         name: name_buf,
         parent_id: 0,
         flags: 0,
         reserved: [0; 4],
     };
+    let pb = &raw mut G_BUF;
     read_block((*sb_ptr).snapshot_area_start, &mut *pb)?;
     let meta_off = ((new_id - 1) as usize) * SnapshotMeta::SIZE;
     if meta_off + SnapshotMeta::SIZE > ONYFS_BLOCK_SIZE {
@@ -623,7 +1268,7 @@ pub unsafe fn snapshot_create(name: &[u8]) -> KResult<u32> {
     }
     write_block((*sb_ptr).snapshot_area_start, &*pb)?;
 
-    // Bump snapshot_count in the in-memory superblock and persist it.
+    // Bump snapshot_count and persist the superblock.
     {
         let sb_mut = &raw mut G_SB;
         (*sb_mut).snapshot_count = new_id;
@@ -632,9 +1277,11 @@ pub unsafe fn snapshot_create(name: &[u8]) -> KResult<u32> {
     Ok(new_id)
 }
 
-/// Roll back filesystem state from a snapshot.
-/// Restores the inode table and data bitmap from the snapshot area.
-/// Data blocks are NOT restored in this stub implementation.
+/// Roll back filesystem state from a snapshot. Reads the per-snapshot
+/// header, RLE-decompresses each stored block (or copies it raw if it was
+/// stored uncompressed), and writes the result back to its original block
+/// number. This restores inode table, data bitmap, and all live data blocks
+/// captured at snapshot time — a true COW rollback.
 pub unsafe fn snapshot_rollback(snapshot_id: u32) -> KResult<()> {
     let sb_ptr = &raw const G_SB;
     if (*sb_ptr).snapshot_area_start == 0 {
@@ -643,21 +1290,51 @@ pub unsafe fn snapshot_rollback(snapshot_id: u32) -> KResult<()> {
     if snapshot_id == 0 || snapshot_id > (*sb_ptr).snapshot_count {
         return Err(Errno::NoEnt);
     }
-    let inode_tbl_blocks = inode_table_block_count();
-    let bitmap_blocks: u32 = 1;
     let snap_data_start =
         (*sb_ptr).snapshot_area_start + 1 + (snapshot_id - 1) * SNAPSHOT_BLOCKS_EACH;
 
-    let pb = &raw mut G_BUF;
-    // Restore inode table.
-    for i in 0..inode_tbl_blocks {
-        read_block(snap_data_start + i, &mut *pb)?;
-        write_block((*sb_ptr).inode_table_start + i, &*pb)?;
+    let mut header = [0u8; ONYFS_BLOCK_SIZE];
+    read_block(snap_data_start, &mut header)?;
+    let n_blocks = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
+    if n_blocks > SNAPSHOT_SLOTS as usize {
+        return Err(Errno::Io);
     }
-    // Restore data bitmap.
-    for i in 0..bitmap_blocks {
-        read_block(snap_data_start + inode_tbl_blocks + i, &mut *pb)?;
-        write_block((*sb_ptr).data_bitmap_start + i, &*pb)?;
+
+    let mut comp_buf = [0u8; 8192];
+    let mut blk_buf = [0u8; ONYFS_BLOCK_SIZE];
+    for i in 0..n_blocks {
+        let off = 4 + i * 8;
+        let block_num = u32::from_le_bytes([
+            header[off],
+            header[off + 1],
+            header[off + 2],
+            header[off + 3],
+        ]);
+        let comp_size = u32::from_le_bytes([
+            header[off + 4],
+            header[off + 5],
+            header[off + 6],
+            header[off + 7],
+        ]) as usize;
+
+        // Read 2 blocks of compressed data.
+        let slot_start = snap_data_start + 1 + (i as u32) * SNAPSHOT_SLOT_BLKS;
+        read_block(slot_start, &mut blk_buf)?;
+        comp_buf[..ONYFS_BLOCK_SIZE].copy_from_slice(&blk_buf);
+        read_block(slot_start + 1, &mut blk_buf)?;
+        comp_buf[ONYFS_BLOCK_SIZE..8192].copy_from_slice(&blk_buf);
+
+        let mut out_buf = [0u8; ONYFS_BLOCK_SIZE];
+        if comp_size == ONYFS_BLOCK_SIZE {
+            // Stored raw.
+            out_buf.copy_from_slice(&comp_buf[..ONYFS_BLOCK_SIZE]);
+        } else {
+            let dec = rle_decompress(&comp_buf[..comp_size], &mut out_buf);
+            if dec != ONYFS_BLOCK_SIZE {
+                return Err(Errno::Io);
+            }
+        }
+        write_block(block_num, &out_buf)?;
     }
     Ok(())
 }

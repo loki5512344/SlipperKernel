@@ -44,6 +44,12 @@ pub struct Proc {
     pub gid: u32,
     pub tf: TrapFrame,
     pub kstack: [u8; KSTACK_SIZE],
+    /// Bitmask of pending (delivered but not yet handled) signals. Bit `s`
+    /// indicates signal `s` is pending. Signal 9 (KILL) is always honored.
+    pub pending_signals: u32,
+    /// Bitmask of blocked signals. Pending signals in this mask are kept
+    /// pending until unblocked. Signal 9 (KILL) cannot be blocked.
+    pub signal_mask: u32,
     /// Linked list pointer — next process in the global list.
     pub next: *mut Proc,
 }
@@ -64,6 +70,8 @@ impl Proc {
             gid: 0,
             tf: TrapFrame::zero(),
             kstack: [0; KSTACK_SIZE],
+            pending_signals: 0,
+            signal_mask: 0,
             next: ptr::null_mut(),
         }
     }
@@ -102,6 +110,8 @@ unsafe fn alloc_proc() -> KResult<*mut Proc> {
     (*p).uid = 0;
     (*p).gid = 0;
     (*p).tf = TrapFrame::zero();
+    (*p).pending_signals = 0;
+    (*p).signal_mask = 0;
     (*p).next = G_PROC_LIST;
     G_PROC_LIST = p;
     Ok(p)
@@ -193,6 +203,8 @@ pub unsafe fn create_user(
     (*p).uid = if ring <= PROC_RING_ROOT { 0 } else { 1000 };
     (*p).gid = (*p).uid;
     (*p).tf = TrapFrame::zero();
+    (*p).pending_signals = 0;
+    (*p).signal_mask = 0;
     (*p).tf.sepc = entry;
     (*p).tf.sp = ustack;
     (*p).tf.a0 = 0;
@@ -230,7 +242,18 @@ pub unsafe fn spawn(path: &[u8], ring_hint: u8, parent_pid: u32) -> KResult<u32>
 }
 
 /// **SYS_wait**: wait for any child to exit. Returns (pid, exit_code).
-pub unsafe fn wait(status_out: *mut i32) -> KResult<u32> {
+/// Blocks (sets current state to `Waiting` and yields) if no child has exited
+/// yet but at least one child exists. The process is woken when a child calls
+/// `exit()` (which transitions the parent back to `Ready`). Returns ENOENT if
+/// the caller has no children at all.
+///
+/// Note on the control-flow quirk: `sched_yield` does not return to its caller
+/// when it actually switches — it `sret`s to user space using the saved trap
+/// frame. Because `tf.sepc` was not yet advanced past the `ecall` instruction
+/// (we are still inside `handle()`), the user process re-executes the `ecall`,
+/// re-entering `wait()` from the top. The loop below therefore executes at
+/// most one iteration per `ecall`; the "retry" happens via re-ecall.
+pub unsafe fn wait(tf: &mut TrapFrame, status_out: *mut i32) -> KResult<u32> {
     let my_pid = current_pid();
     // Look for exited child.
     let mut cur = G_PROC_LIST;
@@ -259,7 +282,14 @@ pub unsafe fn wait(status_out: *mut i32) -> KResult<u32> {
     if !has_child {
         return Err(Errno::NoEnt);
     }
-    Err(Errno::NoEnt) // MVP: no blocking, return immediately.
+    // Block: set state to Waiting and yield. `sched_yield` either switches to
+    // another Ready process (and `sret`s away — control does not return here)
+    // or, if no other process can run, halts the kernel (deadlock detected).
+    // The `Err` below is unreachable in practice but keeps the type system
+    // happy.
+    (*G_CURRENT).state = ProcState::Waiting;
+    sched_yield(tf);
+    Err(Errno::NoEnt)
 }
 
 pub unsafe fn enter_user(pid: u32) -> ! {
@@ -352,9 +382,11 @@ pub unsafe fn sched_yield(tf: &mut TrapFrame) {
         }
     }
     if next.is_null() {
-        // No ready process.
-        if matches!((*G_CURRENT).state, ProcState::Exited) {
-            crate::kernel::klog::puts("proc: no more processes, halting\n");
+        // No ready process. If the current process is Exited or Waiting, the
+        // system is deadlocked (no one can make progress) — halt. Otherwise
+        // (current is Running), keep running the current process.
+        if matches!((*G_CURRENT).state, ProcState::Exited | ProcState::Waiting) {
+            crate::kernel::klog::puts("proc: no ready processes, halting\n");
             crate::kernel::klog::halt();
         }
         (*G_CURRENT).state = ProcState::Running;
@@ -384,4 +416,60 @@ pub fn count() -> usize {
         }
         n
     }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Signals (MVP)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Signals are delivered via two bitmasks per process: `pending_signals`
+// (delivered but not yet handled) and `signal_mask` (blocked). Signal 9
+// (KILL) is always honored and cannot be blocked. The kernel has no
+// user-space signal handlers in this MVP — KILL terminates the process,
+// every other signal is silently cleared (it serves only as a wakeup
+// mechanism for blocked syscalls like `wait` and `read`).
+
+/// Signal number for KILL (POSIX SIGKILL = 9). Always honored, never blocked.
+pub const SIG_KILL: u32 = 9;
+
+/// Deliver `signal` to process `pid`. Sets the corresponding bit in the
+/// target's `pending_signals`. If the target is `Waiting`, it is woken
+/// (transitioned to `Ready`) so it can run again and observe the signal.
+pub unsafe fn signal_send(pid: u32, signal: u32) -> KResult<()> {
+    if signal >= 32 {
+        return Err(Errno::Inval);
+    }
+    let p = by_pid(pid).ok_or(Errno::NoEnt)?;
+    p.pending_signals |= 1u32 << signal;
+    if matches!(p.state, ProcState::Waiting) {
+        p.state = ProcState::Ready;
+    }
+    Ok(())
+}
+
+/// Check the current process for pending unblocked signals. Called from the
+/// trap handler after every trap (just before returning to user space).
+///
+/// - Signal 9 (KILL): terminate the process (call `exit` with code 128+9).
+///   Sets `NEED_RESCHED` so the trap handler will yield to the next process.
+/// - Any other signal: clear its bit (MVP — no user-space handlers).
+pub unsafe fn signal_check(tf: &mut TrapFrame) {
+    let _ = tf;
+    if G_CURRENT.is_null() {
+        return;
+    }
+    let pid = (*G_CURRENT).pid;
+    // KILL cannot be blocked — check it first.
+    if (*G_CURRENT).pending_signals & (1u32 << SIG_KILL) != 0 {
+        (*G_CURRENT).pending_signals &= !(1u32 << SIG_KILL);
+        exit(pid, 128 + SIG_KILL as i32);
+        NEED_RESCHED = true;
+        return;
+    }
+    let pending = (*G_CURRENT).pending_signals & !(*G_CURRENT).signal_mask;
+    if pending == 0 {
+        return;
+    }
+    // MVP: no user-space handlers — clear all other pending unblocked signals.
+    (*G_CURRENT).pending_signals &= (*G_CURRENT).signal_mask;
 }

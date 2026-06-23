@@ -23,6 +23,11 @@ pub const SYS_dropring: u64 = 18; // dropping(target) -> 0/-EPERM
 pub const SYS_snapshot_create: u64 = 19; // snapshot_create(name) -> snap_id/-err
 pub const SYS_snapshot_rollback: u64 = 20; // snapshot_rollback(id) -> 0/-err
 pub const SYS_snapshot_list: u64 = 21; // snapshot_list(buf, len) -> count/-err
+pub const SYS_kill: u64 = 22; // kill(pid, signal) -> 0/-err
+pub const SYS_sigmask: u64 = 23; // sigmask(how, sig) -> 0/-err
+pub const SYS_write_fd: u64 = 24; // write_fd(fd, buf, len) -> written
+pub const SYS_create: u64 = 25; // create(path, mode) -> fd
+pub const SYS_mkdir: u64 = 26; // mkdir(path) -> 0/-err
 
 pub const SEEK_SET: u32 = 0;
 pub const SEEK_CUR: u32 = 1;

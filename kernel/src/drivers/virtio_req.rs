@@ -79,3 +79,37 @@ pub unsafe fn write(dev_idx: usize, lba: u64, buf: *const u8) -> KResult<()> {
     );
     submit_and_wait(dev_idx, VIRTIO_BLK_T_OUT, lba)
 }
+
+/// Read `n_sectors` consecutive 512-byte sectors starting at `lba` into `buf`.
+/// `buf` must point to at least `n_sectors * 512` bytes of writable memory.
+///
+/// MVP implementation: loops over `read()` for each sector. The
+/// infrastructure is here so a future scatter-gather optimization can replace
+/// the loop with a single batched virtio-blk request.
+pub unsafe fn read_multi(dev_idx: usize, lba: u64, n_sectors: u32, buf: *mut u8) -> KResult<()> {
+    for i in 0u32..n_sectors {
+        read(
+            dev_idx,
+            lba + i as u64,
+            buf.add((i as usize) * VIRTIO_BLK_SECTOR),
+        )?;
+    }
+    Ok(())
+}
+
+/// Write `n_sectors` consecutive 512-byte sectors starting at `lba` from `buf`.
+/// `buf` must point to at least `n_sectors * 512` bytes of readable memory.
+///
+/// MVP implementation: loops over `write()` for each sector. Like
+/// `read_multi`, this is the seam where a future scatter-gather optimization
+/// would issue a single batched virtio-blk request.
+pub unsafe fn write_multi(dev_idx: usize, lba: u64, n_sectors: u32, buf: *const u8) -> KResult<()> {
+    for i in 0u32..n_sectors {
+        write(
+            dev_idx,
+            lba + i as u64,
+            buf.add((i as usize) * VIRTIO_BLK_SECTOR),
+        )?;
+    }
+    Ok(())
+}
