@@ -1,52 +1,50 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
-#
-# run_qemu.sh — build & run SlipperKernel under QEMU.
-#
-# Assumes SlipperBoot is checked out at $SLIPPERBOOT_DIR (default: ../SlipperBoot)
-# and that its `bootloader.bin` is built.
-#
-# QEMU options:
-#   -M virt         standard RISC-V virtual platform
-#   -m 256M         256 MB DRAM (kernel + heap live in upper part)
-#   -bios bootloader.bin   SlipperBoot is the firmware, runs in M-mode
-#   -drive ...      raw disk image with SlipperFS, attached as virtio-blk
-#   -nographic      no GUI, use serial console
-
 set -e
-
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-BOOT_DIR="${SLIPPERBOOT_DIR:-$ROOT/../SlipperBoot}"
-BOOT_BIN="$BOOT_DIR/bootloader.bin"
+BOOT_DIR="${ONYXBOOT_DIR:-/home/z/my-project/OnyxBoot}"
+RISCV_TOOLS="${RISCV_TOOLS:-/home/z/my-project/riscv-tools/usr/bin}"
+export PATH="$RISCV_TOOLS:$HOME/.cargo/bin:$PATH"
+export LD_LIBRARY_PATH="/home/z/my-project/riscv-tools/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
 
-if [ ! -f "$BOOT_BIN" ]; then
-    echo "[run_qemu] bootloader.bin not found at $BOOT_BIN"
-    echo "[run_qemu] build SlipperBoot first:  (cd $BOOT_DIR && make)"
-    exit 1
+# Build OnyxBoot if needed
+if [ ! -f "$BOOT_DIR/bootloader.bin" ]; then
+    echo "==> Building OnyxBoot"
+    make -C "$BOOT_DIR" CROSS=riscv64-linux-gnu clean all 2>&1 | tail -3
 fi
 
-if [ ! -f "$ROOT/build/kernel.elf" ]; then
-    echo "[run_qemu] kernel.elf not found, building..."
-    make -C "$ROOT" kernel.elf
-fi
-if [ ! -f "$ROOT/build/init.spx" ]; then
-    echo "[run_qemu] init.spx not found, building..."
-    make -C "$ROOT" init.spx
-fi
-if [ ! -f "$ROOT/build/disk.img" ]; then
-    echo "[run_qemu] disk.img not found, building..."
-    make -C "$ROOT" disk.img
-fi
+# Build OnyxKernel + init + tools
+echo "==> Building OnyxKernel"
+cd "$ROOT"
+. "$HOME/.cargo/env"
+cargo build --release -p onyx_kernel --target riscv64gc-unknown-none-elf 2>&1 | tail -3
+cargo build --release -p onyx_init --target riscv64gc-unknown-none-elf 2>&1 | tail -3
+cargo build --release -p onyx_tools 2>&1 | tail -3
 
-DISK="$ROOT/build/disk.img"
+# Build init.onx (ring=1 for root space)
+BUILD="$ROOT/build"
+mkdir -p "$BUILD"
+echo "==> Converting init ELF → .onx (ring=1)"
+"$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-init" "$BUILD/init.onx"
 
-qemu-system-riscv64 \
-    -M virt \
-    -m 256M \
-    -bios "$BOOT_BIN" \
-    -drive file="$DISK",format=raw,if=none,id=drive0 \
+echo "==> Creating OnyxFS disk image"
+"$ROOT/target/release/mkimage" "$BUILD/init.onx" "$BUILD/disk.img"
+
+# Create partitioned boot disk
+echo "==> Creating partitioned boot disk"
+FAT_LBA=2048
+dd if=/dev/zero of="$BUILD/boot.img" bs=1M count=64 2>/dev/null
+parted -s "$BUILD/boot.img" mklabel msdos 2>/dev/null
+parted -s "$BUILD/boot.img" mkpart primary fat32 1MiB 5MiB 2>/dev/null
+mkfs.fat -F 32 "$BUILD/boot.img" --offset=$FAT_LBA 2>/dev/null
+mcopy -i "$BUILD/boot.img@@$((FAT_LBA * 512))" "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-kernel" ::kernel.elf 2>/dev/null
+SLBA=10240
+dd if="$BUILD/disk.img" of="$BUILD/boot.img" bs=512 seek=$SLBA conv=notrunc 2>/dev/null
+
+echo "==> Starting QEMU"
+timeout 10 qemu-system-riscv64 \
+    -M virt -m 256M \
+    -bios "$BOOT_DIR/bootloader.bin" \
+    -drive file="$BUILD/boot.img",format=raw,if=none,id=drive0 \
     -device virtio-blk-device,drive=drive0 \
-    -nographic \
-    -serial mon:stdio \
-    -no-reboot
+    -display none -serial mon:stdio -no-reboot

@@ -1,13 +1,10 @@
 target/
-SlipperOS.zip
-__pycache__/
-*.pyc
-docs-server.py
-build-docs.py
-AGENTS.md
 build/
 *.o
+*.a
+*.bin
 *.elf
 *.spx
+*.onx
 *.img
-*.bin
+.cargo/registry/

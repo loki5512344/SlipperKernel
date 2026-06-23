@@ -1,0 +1,9 @@
+[package]
+name = "onyx_init"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "onyx-init"
+path = "src/main.rs"

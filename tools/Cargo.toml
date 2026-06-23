@@ -1,0 +1,13 @@
+[package]
+name = "onyx_tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "elf2onx"
+path = "src/elf2onx.rs"
+
+[[bin]]
+name = "mkimage"
+path = "src/mkimage.rs"

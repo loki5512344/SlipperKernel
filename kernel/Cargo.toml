@@ -1,0 +1,12 @@
+[package]
+name = "onyx_kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+onyx_core = { path = "../core" }
+
+[[bin]]
+name = "onyx-kernel"
+path = "src/main.rs"
