@@ -25,10 +25,7 @@ pub unsafe fn handle(tf: &mut TrapFrame) {
         match code {
             INTR_S_TIMER => timer::handle(),
             INTR_S_EXTERN => {
-                let irq = plic::claim();
-                if irq != 0 {
-                    plic::complete(irq);
-                }
+                plic::dispatch();
             }
             INTR_S_SOFT => {
                 crate::kwrn!("trap", "unhandled S-soft interrupt");

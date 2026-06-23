@@ -98,6 +98,37 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
         ];
         vformat(&mut w, "  at %s:%d:%d\n", args);
     }
+    #[allow(deprecated)]
+    if let Some(msg) = info.payload().downcast_ref::<&str>() {
+        w.write_str("  msg: ");
+        w.write_str(msg);
+        w.write_char(b'\n');
+    }
+    // kdump: dump CSR state
+    unsafe {
+        let sepc = crate::arch::csr::read_sepc();
+        let sstatus = crate::arch::csr::read_sstatus();
+        let scause = crate::arch::csr::read_scause();
+        let stval = crate::arch::csr::read_stval();
+        let args: &[Arg] = &[
+            Arg::from(sepc),
+            Arg::from(sstatus),
+            Arg::from(scause),
+            Arg::from(stval),
+        ];
+        vformat(&mut w, "  sepc=%p sstatus=%p scause=%p stval=%p\n", args);
+    }
+    // kdump: dump current process
+    let pid = crate::proc::current_pid();
+    if pid != 0 {
+        let args: &[Arg] = &[Arg::from(pid)];
+        vformat(&mut w, "  pid=%d\n", args);
+    }
+    // kdump: dump process count
+    let cnt = crate::proc::count();
+    let args: &[Arg] = &[Arg::from(cnt)];
+    vformat(&mut w, "  processes=%d\n", args);
+    w.write_str("  System halted.\n");
     halt();
 }
 

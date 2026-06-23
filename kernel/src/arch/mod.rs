@@ -4,6 +4,7 @@ pub mod asm;
 pub mod csr;
 pub mod mmio;
 pub mod regs;
+pub mod smp;
 pub mod trap_frame;
 
 pub use regs::*;

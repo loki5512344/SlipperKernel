@@ -139,5 +139,7 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         Arg::from(r.entry),
         Arg::from(ring as u32)
     );
+    // Release secondary harts for SMP.
+    crate::arch::smp::release_secondary_harts();
     proc::enter_user(1);
 }

@@ -44,8 +44,20 @@ _start:
     csrw satp, zero
     mret
 park:
+    la t0, secondary_release
+    ld t0, 0(t0)
+    beqz t0, park_wait
+    la t0, secondary_entry
+    jr t0
+park_wait:
     wfi
     j park
+
+.section .data
+.balign 8
+.global secondary_release
+secondary_release:
+    .dword 0
 "#,
     saved_hartid = sym SAVED_HARTID,
     saved_fdt = sym SAVED_FDT,

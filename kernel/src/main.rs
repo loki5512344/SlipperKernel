@@ -16,6 +16,7 @@
     clippy::missing_safety_doc,
     clippy::too_many_arguments,
     clippy::needless_pass_by_value,
+    clippy::type_complexity,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
