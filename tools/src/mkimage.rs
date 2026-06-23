@@ -1,19 +1,13 @@
-//! mkimage — OnyxFS disk image builder with manifest support.
+//! mkimage — OnyxFS disk image builder with manifest + --add / --add-dir.
 //!
-//! Usage: mkimage <manifest> <output.img>
+//! Usage:
+//!   mkimage <manifest> <output.img> [--add <host> <fs_path>]... [--add-dir <host_dir> <fs_prefix>]...
+//!   mkimage --add <host> <fs_path> [--add ...] <output.img>
 //!
 //! Manifest format (one entry per line):
 //!   dir <path>                          — create directory
 //!   file <local_path> <fs_path> [--ring=1]  — add file
 //!   # comment
-//!
-//! Example:
-//!   dir /bin
-//!   dir /etc
-//!   dir /service
-//!   file build/init.onx /bin/init --ring=1
-//!   file build/osh.onx /bin/osh
-//!   file build/login.onx /bin/login --ring=1
 
 use std::env;
 use std::fs::File;
@@ -30,22 +24,10 @@ const ONYFS_DT_DIR: u32 = 0o040755;
 const INODE_SIZE: usize = 64;
 const DIRENT_SIZE: usize = 36;
 const INODES_PER_BLOCK: usize = ONYFS_BLOCK_SIZE / INODE_SIZE;
-#[expect(dead_code)]
-const DIRENTS_PER_BLOCK: usize = ONYFS_BLOCK_SIZE / DIRENT_SIZE;
-#[expect(dead_code)]
-const MAX_INODES: u32 = 256;
-#[expect(dead_code)]
-const MAX_BLOCKS: u32 = 4096;
 
 struct Entry {
-    #[expect(dead_code)]
-    name: String,
     inode: u32,
-    #[expect(dead_code)]
-    is_dir: bool,
     data: Vec<u8>,
-    #[expect(dead_code)]
-    ring1: bool,
 }
 
 struct DirNode {
@@ -57,20 +39,15 @@ struct DirNode {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: mkimage <manifest> <output.img>");
+        eprintln!("usage: mkimage [<manifest>] <output.img> [--add <host> <fs_path>]... [--add-dir <host_dir> <fs_prefix>]...");
         eprintln!("Manifest format:");
         eprintln!("  dir /path              — create directory");
         eprintln!("  file local /fs/path [--ring=1]  — add file");
         eprintln!("  # comment");
+        eprintln!("Example:");
+        eprintln!("  mkimage manifest.txt disk.img --add-dir build/ /");
         process::exit(1);
     }
-    let manifest_path = &args[1];
-    let output_path = &args[2];
-
-    let manifest = std::fs::read_to_string(manifest_path).unwrap_or_else(|e| {
-        eprintln!("read manifest {}: {}", manifest_path, e);
-        process::exit(1);
-    });
 
     let mut dirs: Vec<DirNode> = Vec::new();
     let mut files: Vec<Entry> = Vec::new();
@@ -82,65 +59,88 @@ fn main() {
         entries: Vec::new(),
     });
 
-    for line in manifest.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let parts: Vec<&str> = line.splitn(3, ' ').collect();
-        match parts[0] {
-            "dir" => {
-                let path = parts.get(1).unwrap_or(&"/");
-                let parent = find_parent_dir(&dirs, path);
-                let name = basename(path);
-                let ino = next_ino;
-                next_ino += 1;
-                dirs[parent].entries.push((name.to_string(), ino, true));
-                dirs.push(DirNode {
-                    ino,
-                    parent_ino: dirs[parent].ino,
-                    entries: Vec::new(),
-                });
-                eprintln!("  dir {} (ino={})", path, ino);
+    let mut i = 1;
+
+    // If second arg exists and doesn't start with '--', treat arg[1] as manifest
+    if i < args.len() && !args[i].starts_with("--") {
+        let manifest_path = &args[i];
+        i += 1;
+        let manifest = std::fs::read_to_string(manifest_path).unwrap_or_else(|e| {
+            eprintln!("read manifest {}: {}", manifest_path, e);
+            process::exit(1);
+        });
+        for line in manifest.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
             }
-            "file" => {
-                let local = parts.get(1).unwrap_or(&"");
-                let fs_path = parts
-                    .get(2)
-                    .unwrap_or(&"")
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("");
-                let ring1 = line.contains("--ring=1");
-                let data = std::fs::read(local).unwrap_or_else(|e| {
-                    eprintln!("read {}: {}", local, e);
+            let parts: Vec<&str> = line.splitn(3, ' ').collect();
+            match parts[0] {
+                "dir" => add_dir(&mut dirs, parts.get(1).unwrap_or(&"/"), &mut next_ino),
+                "file" => {
+                    let local = parts.get(1).unwrap_or(&"");
+                    let fs_path = parts
+                        .get(2)
+                        .unwrap_or(&"")
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("");
+                    add_file(&mut dirs, &mut files, local, fs_path, &mut next_ino);
+                }
+                _ => {
+                    eprintln!("warning: unknown manifest entry: {}", line);
+                }
+            }
+        }
+    }
+
+    let output_path;
+
+    // Process --add and --add-dir flags; last positional arg is output
+    loop {
+        if i >= args.len() {
+            eprintln!("missing output path");
+            process::exit(1);
+        }
+        match args[i].as_str() {
+            "--add" => {
+                i += 1;
+                if i + 1 >= args.len() {
+                    eprintln!("--add requires <host> <fs_path>");
                     process::exit(1);
-                });
-                let parent = find_parent_dir(&dirs, fs_path);
-                let name = basename(fs_path);
-                let ino = next_ino;
-                next_ino += 1;
-                dirs[parent].entries.push((name.to_string(), ino, false));
-                files.push(Entry {
-                    name: name.to_string(),
-                    inode: ino,
-                    is_dir: false,
-                    data,
-                    ring1,
-                });
-                eprintln!(
-                    "  file {} -> {} (ino={}, {} bytes{})",
-                    local,
-                    fs_path,
-                    ino,
-                    files.last().unwrap().data.len(),
-                    if ring1 { " [ring1]" } else { "" }
-                );
+                }
+                let host = &args[i];
+                i += 1;
+                let fs_path = &args[i];
+                i += 1;
+                add_file(&mut dirs, &mut files, host, fs_path, &mut next_ino);
+            }
+            "--add-dir" => {
+                i += 1;
+                if i + 1 >= args.len() {
+                    eprintln!("--add-dir requires <host_dir> <fs_prefix>");
+                    process::exit(1);
+                }
+                let host_dir = &args[i];
+                i += 1;
+                let fs_prefix = &args[i];
+                i += 1;
+                add_dir_recursive(&mut dirs, &mut files, host_dir, fs_prefix, &mut next_ino);
             }
             _ => {
-                eprintln!("warning: unknown manifest entry: {}", line);
+                output_path = args[i].clone();
+                i += 1;
+                break;
             }
         }
+    }
+
+    if i < args.len() {
+        eprintln!("warning: extra arguments ignored: {:?}", &args[i..]);
+    }
+
+    if files.is_empty() && dirs.len() == 1 {
+        eprintln!("warning: no files or directories added to image");
     }
 
     let total_inodes = next_ino;
@@ -187,7 +187,7 @@ fn main() {
         inode_table_start,
     );
 
-    File::create(output_path)
+    File::create(&output_path)
         .unwrap_or_else(|e| {
             eprintln!("create {}: {}", output_path, e);
             process::exit(1);
@@ -196,12 +196,119 @@ fn main() {
         .unwrap();
     eprintln!(
         "mkimage: {} -> {} ({} blocks, {} bytes, {} inodes)",
-        manifest_path,
+        &args[1],
         output_path,
         total_blocks,
         img.len(),
         total_inodes
     );
+}
+
+fn add_dir(dirs: &mut Vec<DirNode>, path: &str, next_ino: &mut u32) {
+    let parent = find_parent_dir(dirs, path);
+    let name = basename(path);
+    let ino = *next_ino;
+    *next_ino += 1;
+    dirs[parent].entries.push((name.to_string(), ino, true));
+    dirs.push(DirNode {
+        ino,
+        parent_ino: dirs[parent].ino,
+        entries: Vec::new(),
+    });
+    eprintln!("  dir {} (ino={})", path, ino);
+}
+
+fn add_file(
+    dirs: &mut Vec<DirNode>,
+    files: &mut Vec<Entry>,
+    host: &str,
+    fs_path: &str,
+    next_ino: &mut u32,
+) {
+    let data = std::fs::read(host).unwrap_or_else(|e| {
+        eprintln!("read {}: {}", host, e);
+        process::exit(1);
+    });
+    ensure_parent_dirs(dirs, fs_path, next_ino);
+    let parent = find_parent_dir(dirs, fs_path);
+    let name = basename(fs_path);
+    let ino = *next_ino;
+    *next_ino += 1;
+    dirs[parent].entries.push((name.to_string(), ino, false));
+    files.push(Entry {
+        inode: ino,
+        data,
+    });
+    eprintln!(
+        "  {} -> {} (ino={}, {} bytes)",
+        host,
+        fs_path,
+        ino,
+        files.last().unwrap().data.len()
+    );
+}
+
+fn add_dir_recursive(
+    dirs: &mut Vec<DirNode>,
+    files: &mut Vec<Entry>,
+    host_dir: &str,
+    fs_prefix: &str,
+    next_ino: &mut u32,
+) {
+    let prefix = fs_prefix.trim_end_matches('/').to_string();
+    let host_root = std::path::Path::new(host_dir);
+    let mut stack = vec![host_root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| {
+            eprintln!("read_dir {}: {}", dir.display(), e);
+            process::exit(1);
+        }) {
+            let entry = entry.unwrap_or_else(|e| {
+                eprintln!("read_dir entry: {}", e);
+                process::exit(1);
+            });
+            let entry_path = entry.path();
+            if let Ok(relative) = entry_path.strip_prefix(host_root) {
+                let fs_path = format!("{}/{}", prefix, relative.display());
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    add_dir(dirs, &fs_path, next_ino);
+                    stack.push(entry_path);
+                } else if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    add_file(
+                        dirs,
+                        files,
+                        entry_path.to_str().unwrap(),
+                        &fs_path,
+                        next_ino,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Ensure all ancestor directories of `path` exist in `dirs`.
+fn ensure_parent_dirs(dirs: &mut Vec<DirNode>, path: &str, next_ino: &mut u32) {
+    let path = path.trim_start_matches('/');
+    let mut cur = String::new();
+    for comp in path.split('/') {
+        if comp.is_empty() || comp == basename(path) {
+            continue;
+        }
+        cur.push('/');
+        cur.push_str(comp);
+        // check if dir already exists
+        let exists = dirs.iter().any(|d| {
+            let name = basename(&cur);
+            d.parent_ino == dirs[0].ino && d.entries.iter().any(|(n, _, _)| n == name)
+        });
+        if !exists {
+            add_dir(dirs, &cur, next_ino);
+        }
+    }
 }
 
 fn find_parent_dir(dirs: &[DirNode], path: &str) -> usize {

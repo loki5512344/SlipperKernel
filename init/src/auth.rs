@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-
 use crate::syscalls;
 
 pub const PASSWD_PATH: &[u8] = b"/etc/passwd";
@@ -34,8 +33,8 @@ pub fn parse_passwd(data: &[u8], users: &mut [PasswdEntry; MAX_USERS]) -> usize 
         let mut fields = [0usize; 5];
         let mut fi = 0;
         let mut start = 0;
-        for i in 0..line.len() {
-            if line[i] == b':' {
+        for (i, &b) in line.iter().enumerate() {
+            if b == b':' {
                 if fi < fields.len() {
                     fields[fi] = start;
                     fi += 1;
@@ -75,8 +74,7 @@ pub fn parse_passwd(data: &[u8], users: &mut [PasswdEntry; MAX_USERS]) -> usize 
 }
 
 pub fn find_user(users: &[PasswdEntry; MAX_USERS], count: usize, name: &[u8]) -> Option<usize> {
-    for i in 0..count {
-        let entry = &users[i];
+    users[..count].iter().position(|entry| {
         let mut match_len = 0;
         while match_len < entry.name.len() && entry.name[match_len] != 0 && match_len < name.len()
         {
@@ -85,20 +83,12 @@ pub fn find_user(users: &[PasswdEntry; MAX_USERS], count: usize, name: &[u8]) ->
             }
             match_len += 1;
         }
-        if match_len == name.len() && (entry.name[match_len] == 0 || match_len == entry.name.len()) {
-            return Some(i);
-        }
-    }
-    None
+        match_len == name.len() && (entry.name[match_len] == 0 || match_len == entry.name.len())
+    })
 }
 
 pub fn find_user_by_uid(users: &[PasswdEntry; MAX_USERS], count: usize, uid: u32) -> Option<usize> {
-    for i in 0..count {
-        if users[i].uid == uid {
-            return Some(i);
-        }
-    }
-    None
+    users[..count].iter().position(|e| e.uid == uid)
 }
 
 pub fn read_passwd(users: &mut [PasswdEntry; MAX_USERS]) -> Result<usize, i64> {
@@ -572,7 +562,7 @@ fn format_dec(n: u32) -> [u8; 12] {
 fn parse_dec(s: &[u8]) -> u32 {
     let mut val: u32 = 0;
     for &b in s.iter() {
-        if b >= b'0' && b <= b'9' {
+        if b.is_ascii_digit() {
             val = val.wrapping_mul(10).wrapping_add(u32::from(b - b'0'));
         } else {
             break;

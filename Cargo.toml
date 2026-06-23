@@ -4,8 +4,8 @@ members = ["kernel", "core", "init", "tools"]
 
 [workspace.package]
 version = "0.3.0"
-edition = "2021"
-rust-version = "1.75"
+edition = "2024"
+rust-version = "1.85"
 license = "GPL-3.0-or-later"
 authors = ["loki5512344"]
 

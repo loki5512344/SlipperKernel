@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 #[repr(i64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

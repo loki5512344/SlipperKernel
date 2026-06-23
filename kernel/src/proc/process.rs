@@ -55,6 +55,7 @@ pub struct Proc {
 }
 
 impl Proc {
+    #[expect(dead_code)]
     const fn new() -> Self {
         Self {
             pid: 0,

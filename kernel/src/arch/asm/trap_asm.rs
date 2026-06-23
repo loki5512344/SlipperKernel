@@ -142,7 +142,7 @@ drop_to_user:
 "#,
 );
 
-extern "Rust" {
+unsafe extern "Rust" {
     pub fn trap_entry();
     pub fn trap_return();
     pub fn sched_switch(new_sp: usize) -> !;

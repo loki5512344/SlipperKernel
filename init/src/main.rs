@@ -8,7 +8,6 @@
 #![no_main]
 #![warn(clippy::all)]
 #![allow(
-    dead_code,
     clippy::missing_safety_doc,
     unsafe_op_in_unsafe_fn,
     non_snake_case
@@ -20,7 +19,7 @@ mod syscalls;
 
 const BANNER: &str = "[init] OnyxOS init v0.3 (root space)\n";
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     syscalls::write(1, BANNER.as_ptr(), BANNER.len());
 

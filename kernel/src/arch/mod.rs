@@ -9,7 +9,7 @@ pub mod trap_frame;
 
 pub use regs::*;
 
-extern "Rust" {
+unsafe extern "Rust" {
     pub static __bss_start: u8;
     pub static __bss_end: u8;
     pub static __stack_top: u8;
@@ -17,7 +17,7 @@ extern "Rust" {
     pub static __kernel_end: u8;
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static SAVED_HARTID: usize = 0;
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static SAVED_FDT: usize = 0;

@@ -7,6 +7,7 @@ use crate::libfdt::fdt;
 use crate::mm::{heap, pmm, vmm};
 use crate::proc;
 use crate::srv::{timer, trap};
+use onyx_core::errno::KResult;
 use onyx_core::fmt::Arg;
 
 const BANNER: &str = "\n  ___ _ _                  _\n / __(_) |_ _____ __ _____| |__\n \\__ \\ | \\ V / -_) V /___| / /_\n |___/_|_|\\_/\\___|\\_/    |_\\__/\n  OnyxKernel v0.3 (Rust) — RISC-V 64 GC\n\n";
@@ -74,6 +75,25 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
     }
     vfs::mount_procfs();
     crate::kinf!("vfs", "procfs mounted at /proc");
+
+    // Load /font/default.psf
+    (|| -> KResult<()> {
+        let token = vfs::open(b"/font/default.psf", vfs::PERM_READ)?;
+        let mut size = 0u32;
+        vfs::stat(token, &mut size).ok();
+        if size > 0 {
+            let buf = heap::kmalloc(size as usize)?;
+            vfs::read(token, buf, size).ok();
+            vfs::close(token).ok();
+            crate::font::init(core::slice::from_raw_parts(buf, size as usize)).ok();
+            heap::kfree(buf);
+            crate::kinf!("font", "loaded /font/default.psf");
+        } else {
+            vfs::close(token).ok();
+        }
+        Ok(())
+    })()
+    .unwrap_or_else(|_| crate::kwrn!("font", "no /font/default.psf, using blank font"));
 
     // Load /bin/init as PID 1 in root space (ring 1).
     let path = b"/bin/init";

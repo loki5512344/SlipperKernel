@@ -18,6 +18,7 @@ pub(super) struct Pmm {
     pub(super) total_pages: usize,
     pub(super) free_pages: usize,
     pub(super) bitmap: *mut u8,
+    #[expect(dead_code)]
     pub(super) bitmap_bytes: usize,
     pub(super) slab_heads: [*mut slab::SlabHeader; SLAB_SIZES.len()],
 }

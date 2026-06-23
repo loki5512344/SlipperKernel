@@ -29,9 +29,11 @@ pub const PROCFS_MEMINFO_INO: u32 = 4;
 pub const PROCFS_UPTIME_INO: u32 = 5;
 pub const PROCFS_LOAD_INO: u32 = 6;
 pub const PROCFS_STAT_INO: u32 = 7;
+#[expect(dead_code)]
 const PROCFS_MAX_INO: u32 = 7;
 
 pub const PROCFS_MAX_SIZE: u32 = 512;
+#[expect(dead_code)]
 const DIRENT_SIZE: usize = 40;
 
 const VERSION_STR: &str = "OnyxKernel v0.3 (Rust) — RISC-V 64 GC\n";
@@ -108,7 +110,7 @@ unsafe fn generate_content(ino: u32) -> KResult<&'static [u8]> {
             let mut pos = 0;
             pos += format_line(b"harts\t\t: ", harts, b"\n", buf, pos);
             for h in 0..harts {
-                pos += format_line(b"processor\t: ", h as u64, b"\n", buf, pos);
+                pos += format_line(b"processor\t: ", h, b"\n", buf, pos);
                 if pos >= buf.len() { break; }
             }
             pos += format_line_raw(b"model name\t: rv64gc\n", buf, pos);
@@ -132,7 +134,8 @@ unsafe fn generate_content(ino: u32) -> KResult<&'static [u8]> {
             pos += format_line(b"MemUsed\t\t: ", used_kb, b" kB\n", buf, pos);
             pos += format_line(b"HeapTotal\t: 4096 kB\n", 0, b"", buf, pos);
             pos += format_line(b"HeapUsed\t: ", (heap_used / 1024) as u64, b" kB\n", buf, pos);
-            pos += format_line(b"HeapFree\t: ", ((4096 - heap_used / 1024).max(0)) as u64, b" kB\n", buf, pos);
+            let heap_free_kb = 4096u64.saturating_sub(heap_used as u64 / 1024);
+            pos += format_line(b"HeapFree\t: ", heap_free_kb, b" kB\n", buf, pos);
             core::str::from_utf8_unchecked(&buf[..pos.min(buf.len())])
         }
         PROCFS_UPTIME_INO => {

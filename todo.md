@@ -30,7 +30,7 @@
 - [x] **Per-process FD table** — уже сделан (per-process VfsFd в Proc)
 - [x] **add_dirent overwrite** — create теперь перезаписывает существующий dirent (вместо дублирования)
 - [x] **First-boot setup** — нет дефолтных паролей; login запрашивает пароль root при первом запуске
-- [ ] **mkimage с поддиректориями** — --add-dir, --add file path для /bin/ /service/ /etc/ /users/ /font/
+- [x] **mkimage --add/--add-dir** — рекурсивное добавление директорий и отдельных файлов
 
 ### Приоритет 2 — /proc/ файловая система:
 - [x] **procfs** — виртуальная ФС с информацией о системе:
@@ -43,10 +43,10 @@
 - [x] Интеграция с VFS — монтирование на /proc при старте (mount table / procfs module)
 
 ### Приоритет 3 — /font/ и шрифты:
-- [ ] **Поддержка шрифтов в VGA/framebuffer**:
-  - /font/default.psf — основной шрифт (PSF формат)
-  - Загрузка шрифта при инициализации терминала
-  - Поддержка Unicode таблицы в шрифте
+- [x] **psfgen** — инструмент генерации PSF1 шрифта (256 glyphs, 8x16)
+- [x] **PSF1/PSF2 парсер** — `kernel/src/font/mod.rs` с `font::init()`, `font::glyph_bitmap()`
+- [x] **Загрузка шрифта** — ядро читает `/font/default.psf` после монтирования root
+- [ ] **Поддержка Unicode таблицы** в PSF1/PSF2 (glyph → unicode mapping)
 
 ### Приоритет 4 — IPC:
 - [ ] **IPC channels** — chan_create/connect/send/recv для root↔user коммуникации

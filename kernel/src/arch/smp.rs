@@ -3,7 +3,7 @@ use crate::arch::csr;
 
 static mut G_ONLINE_HARTS: u32 = 1;
 
-extern "Rust" {
+unsafe extern "Rust" {
     static mut secondary_release: u64;
 }
 
@@ -14,7 +14,7 @@ pub unsafe fn release_secondary_harts() {
 }
 
 /// Entry point for secondary harts.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "Rust" fn secondary_entry() -> ! {
     let hartid = csr::read_mhartid() as usize;
     crate::kinf!(

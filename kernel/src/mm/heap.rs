@@ -18,7 +18,9 @@ impl Block {
 }
 
 struct Heap {
+    #[expect(dead_code)]
     base: usize,
+    #[expect(dead_code)]
     size: usize,
     used: usize,
     free_list: *mut Block,

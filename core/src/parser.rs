@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 #[inline]
 pub fn be32(p: &[u8]) -> u32 {

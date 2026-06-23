@@ -1,5 +1,4 @@
 #![allow(non_upper_case_globals)]
-#![allow(dead_code)]
 
 pub const MSTATUS_MIE: u64 = 1 << 3;
 pub const MSTATUS_SIE: u64 = 1 << 1;

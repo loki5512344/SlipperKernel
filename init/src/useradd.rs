@@ -1,13 +1,13 @@
 #![no_std]
 #![no_main]
-#![allow(dead_code, unsafe_op_in_unsafe_fn, non_snake_case, clippy::missing_safety_doc)]
+#![allow(unsafe_op_in_unsafe_fn, non_snake_case, clippy::missing_safety_doc)]
 
 use core::arch::asm;
 
 mod syscalls;
 mod auth;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     let ring = syscalls::getring();
     if ring != 1 {
@@ -51,9 +51,8 @@ pub unsafe extern "C" fn _start() -> ! {
     // Build home path
     let mut home = [0u8; 64];
     home[..7].copy_from_slice(b"/users/");
-    for i in 0..uname.len().min(56) {
-        home[7 + i] = uname[i];
-    }
+    let n = uname.len().min(56);
+    home[7..7 + n].copy_from_slice(&uname[..n]);
 
     let shell = b"/bin/osh";
 
@@ -83,7 +82,7 @@ pub unsafe extern "C" fn _start() -> ! {
     syscalls::exit(0);
 }
 
-unsafe fn read_line<'a>(buf: &'a mut [u8]) -> &'a [u8] {
+unsafe fn read_line(buf: &mut [u8]) -> &[u8] {
     let n = syscalls::read(0, buf.as_mut_ptr(), (buf.len() - 1) as u64);
     if n <= 0 {
         return &[];
@@ -98,7 +97,7 @@ unsafe fn read_line<'a>(buf: &'a mut [u8]) -> &'a [u8] {
 fn parse_dec(s: &[u8]) -> u32 {
     let mut val: u32 = 0;
     for &b in s.iter() {
-        if b >= b'0' && b <= b'9' {
+        if b.is_ascii_digit() {
             val = val.wrapping_mul(10).wrapping_add(u32::from(b - b'0'));
         } else {
             break;

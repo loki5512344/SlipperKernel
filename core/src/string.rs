@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 pub unsafe fn strlen(s: *const u8) -> usize {
     let mut n = 0;
@@ -69,17 +69,17 @@ pub unsafe fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
 }
 
 #[cfg(not(test))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_memcpy(d: *mut u8, s: *const u8, n: usize) -> *mut u8 {
     memcpy(d, s, n)
 }
 #[cfg(not(test))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_memset(s: *mut u8, c: u8, n: usize) -> *mut u8 {
     memset(s, c, n)
 }
 #[cfg(not(test))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_memmove(d: *mut u8, s: *const u8, n: usize) -> *mut u8 {
     memmove(d, s, n)
 }

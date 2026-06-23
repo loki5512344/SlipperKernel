@@ -13,7 +13,6 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    dead_code,
     non_camel_case_types
 )]
 

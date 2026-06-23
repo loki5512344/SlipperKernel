@@ -9,7 +9,7 @@ pub mod trap_asm;
 
 pub use trap_asm::{drop_to_user, sched_switch, trap_entry, trap_return};
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn trap_handler(tf: *mut crate::arch::trap_frame::TrapFrame) {
     let frame = unsafe { &mut *tf };
     unsafe {

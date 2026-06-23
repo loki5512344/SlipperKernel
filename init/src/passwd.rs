@@ -1,13 +1,13 @@
 #![no_std]
 #![no_main]
-#![allow(dead_code, unsafe_op_in_unsafe_fn, non_snake_case, clippy::missing_safety_doc)]
+#![allow(unsafe_op_in_unsafe_fn, non_snake_case, clippy::missing_safety_doc)]
 
 use core::arch::asm;
 
 mod syscalls;
 mod auth;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     let ring = syscalls::getring();
 
@@ -90,7 +90,7 @@ unsafe fn do_root_passwd() {
     }
 }
 
-unsafe fn read_line<'a>(buf: &'a mut [u8]) -> &'a [u8] {
+unsafe fn read_line(buf: &mut [u8]) -> &[u8] {
     let n = syscalls::read(0, buf.as_mut_ptr(), (buf.len() - 1) as u64);
     if n <= 0 {
         return &[];

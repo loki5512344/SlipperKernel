@@ -34,6 +34,10 @@ echo "==> Converting userland ELFs → .onx"
 
 # No default passwd/shadow — first boot creates them interactively.
 
+# Generate PSF1 font
+echo "==> Generating font"
+"$ROOT/target/release/psfgen" "$BUILD/default.psf"
+
 # Create manifest
 cat > "$BUILD/manifest.txt" << EOF
 dir /bin
@@ -47,6 +51,7 @@ file $BUILD/osh.onx /bin/osh
 file $BUILD/passwd.onx /bin/passwd
 file $BUILD/useradd.onx /bin/useradd --ring=1
 file $BUILD/userdel.onx /bin/userdel --ring=1
+file $BUILD/default.psf /font/default.psf
 EOF
 
 # Create OnyxFS disk image using manifest

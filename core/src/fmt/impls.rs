@@ -1,6 +1,5 @@
 //! Arg enum + From impls.
 
-#![allow(dead_code)]
 
 #[derive(Clone, Copy)]
 pub enum Arg<'a> {

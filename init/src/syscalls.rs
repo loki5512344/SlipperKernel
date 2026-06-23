@@ -1,4 +1,5 @@
 //! Syscall wrappers for /bin/init.
+#![allow(dead_code)]
 use core::arch::asm;
 
 pub const SYS_WRITE: u64 = 1;

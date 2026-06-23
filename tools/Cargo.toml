@@ -11,3 +11,7 @@ path = "src/elf2onx.rs"
 [[bin]]
 name = "mkimage"
 path = "src/mkimage.rs"
+
+[[bin]]
+name = "psfgen"
+path = "src/psfgen.rs"

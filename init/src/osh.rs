@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![allow(
-    dead_code,
     unsafe_op_in_unsafe_fn,
     non_snake_case,
     clippy::missing_safety_doc
@@ -14,7 +13,7 @@ mod syscalls;
 // Shell prompt
 const PROMPT: &str = "osh$ ";
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     syscalls::write(1, b"OnyxShell v0.1 (user space)\n".as_ptr(), 30);
 

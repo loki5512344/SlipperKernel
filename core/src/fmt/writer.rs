@@ -1,6 +1,5 @@
 //! Format trait + vformat engine.
 
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 use super::format_num::{write_dec, write_hex_or_dec};

@@ -13,9 +13,11 @@ static mut G_SEC: [u8; 512] = [0; 512];
 unsafe fn read_sec(lba: u64, buf: &mut [u8; 512]) -> KResult<()> {
     virtio_req::read(G_DEV, lba, buf.as_mut_ptr())
 }
+#[expect(dead_code)]
 unsafe fn cluster_to_lba(cluster: u32) -> u64 {
     (G_DATA_LBA as u64) + ((cluster - 2) as u64) * (G_SPC as u64)
 }
+#[expect(dead_code)]
 unsafe fn fat_next(cluster: u32) -> u32 {
     let fat_offset = (cluster as u64) * 4;
     let fat_lba = (G_RESVD as u64) + (fat_offset / 512);

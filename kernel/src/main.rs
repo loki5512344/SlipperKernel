@@ -36,7 +36,6 @@
     clippy::not_unsafe_ptr_arg_deref,
     clippy::deref_addrof,
     clippy::collapsible_if,
-    dead_code,
     unused_imports,
     unused_parens,
     unsafe_op_in_unsafe_fn,
@@ -51,6 +50,7 @@ extern crate onyx_core;
 
 pub mod arch;
 pub mod drivers;
+pub mod font;
 pub mod fs;
 pub mod ipc;
 pub mod libfdt;
@@ -61,7 +61,7 @@ pub mod syscall;
 
 use core::panic::PanicInfo;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "Rust" fn kmain(hartid: usize, fdt_addr: usize) -> ! {
     crate::srv::main::kmain(hartid, fdt_addr)
 }
