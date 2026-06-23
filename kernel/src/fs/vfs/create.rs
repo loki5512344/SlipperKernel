@@ -1,6 +1,7 @@
 //! File creation — `create` (regular file) and `mkdir` (directory).
-use super::{alloc_fd, fd_token, FdToken, Fs, G_FDS, PERM_READ, PERM_SEEK, PERM_WRITE};
+use super::{alloc_fd, fd_token, FdToken, Fs, PERM_READ, PERM_SEEK, PERM_WRITE};
 use crate::fs::onyxfs;
+use crate::proc;
 use onyx_core::errno::{Errno, KResult};
 
 /// Split a NUL-free path like "/foo/bar/baz" into ("foo/bar", "baz").
@@ -37,8 +38,8 @@ pub unsafe fn create(path: &[u8], mode: u32) -> KResult<FdToken> {
     };
     let new_ino = onyxfs::create(parent_ino, filename, mode)?;
     let idx = alloc_fd(PERM_READ | PERM_WRITE | PERM_SEEK)?;
-    let pf = &raw mut G_FDS;
-    let fd = &mut (*pf)[idx];
+    let p = proc::current();
+    let fd = &mut p.fds[idx];
     fd.ino = new_ino;
     fd.size = 0;
     fd.fs = Fs::Onyx;

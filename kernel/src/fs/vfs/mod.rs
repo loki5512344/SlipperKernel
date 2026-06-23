@@ -60,7 +60,10 @@ pub const fn fd_token_epoch(token: FdToken) -> u32 {
 }
 
 pub(super) static mut G_ROOT_FS: Fs = Fs::None;
-pub(super) static mut G_FDS: [VfsFd; VFS_MAX_FDS] = [VfsFd {
+
+/// Kernel-global FD table for early boot (before any process exists).
+/// Used when `proc::current()` returns null (kmain loading /bin/init).
+static mut G_KERNEL_FDS: [VfsFd; VFS_MAX_FDS] = [VfsFd {
     ino: 0,
     size: 0,
     pos: 0,
@@ -70,11 +73,13 @@ pub(super) static mut G_FDS: [VfsFd; VFS_MAX_FDS] = [VfsFd {
     epoch: 0,
 }; VFS_MAX_FDS];
 
-pub unsafe fn init() {
-    let pf = &raw mut G_FDS;
-    for fd in (*pf).iter_mut() {
-        *fd = VfsFd::default();
-    }
+/// VFS init — no global FD table anymore (per-process tables live in `Proc`).
+/// Kept as a no-op so `kmain` can still call it without a code change.
+pub unsafe fn init() {}
+
+/// Returns true if we're in early boot (no current process).
+unsafe fn is_kernel_boot() -> bool {
+    crate::proc::current_pid() == 0
 }
 
 pub unsafe fn mount_root(dev: usize, onyxfs_lba: u32) -> KResult<()> {
@@ -93,15 +98,32 @@ pub fn root_fs() -> Fs {
     unsafe { *(&raw const G_ROOT_FS) }
 }
 
+/// Allocate a free FD slot in the *current process's* FD table.
+/// During early boot (no process), uses the kernel-global FD table.
 pub(super) unsafe fn alloc_fd(perms: u32) -> KResult<usize> {
-    let pf = &raw mut G_FDS;
+    if is_kernel_boot() {
+        let p = &raw mut G_KERNEL_FDS;
+        for i in 0..VFS_MAX_FDS {
+            if !(*p)[i].used {
+                (*p)[i].used = true;
+                (*p)[i].perms = perms;
+                (*p)[i].epoch = (*p)[i].epoch.wrapping_add(1);
+                if (*p)[i].epoch == 0 {
+                    (*p)[i].epoch = 1;
+                }
+                return Ok(i);
+            }
+        }
+        return Err(Errno::NoMem);
+    }
+    let p = crate::proc::current();
     for i in 0..VFS_MAX_FDS {
-        if !(*pf)[i].used {
-            (*pf)[i].used = true;
-            (*pf)[i].perms = perms;
-            (*pf)[i].epoch = (*pf)[i].epoch.wrapping_add(1);
-            if (*pf)[i].epoch == 0 {
-                (*pf)[i].epoch = 1;
+        if !p.fds[i].used {
+            p.fds[i].used = true;
+            p.fds[i].perms = perms;
+            p.fds[i].epoch = p.fds[i].epoch.wrapping_add(1);
+            if p.fds[i].epoch == 0 {
+                p.fds[i].epoch = 1;
             }
             return Ok(i);
         }
@@ -109,25 +131,77 @@ pub(super) unsafe fn alloc_fd(perms: u32) -> KResult<usize> {
     Err(Errno::NoMem)
 }
 
-pub(super) unsafe fn fd_check(token: FdToken) -> KResult<&'static mut VfsFd> {
+/// Validate a capability FD token. Returns the slot index on success.
+pub(super) unsafe fn fd_check(token: FdToken) -> KResult<usize> {
     let idx = fd_token_idx(token);
     if idx >= VFS_MAX_FDS {
         return Err(Errno::BadFd);
     }
-    let pf = &raw mut G_FDS;
-    let fd = &mut (*pf)[idx];
+    let fd = fd_get(idx);
     if !fd.used || fd.epoch != fd_token_epoch(token) {
         return Err(Errno::BadFd);
     }
-    Ok(fd)
+    Ok(idx)
 }
 
-pub(super) unsafe fn fd_check_perm(token: FdToken, perm: u32) -> KResult<&'static mut VfsFd> {
-    let fd = fd_check(token)?;
+/// Like `fd_check`, but also requires the given permission bits.
+pub(super) unsafe fn fd_check_perm(token: FdToken, perm: u32) -> KResult<usize> {
+    let idx = fd_check(token)?;
+    let fd = fd_get(idx);
     if fd.perms & perm == 0 {
         return Err(Errno::Perm);
     }
-    Ok(fd)
+    Ok(idx)
+}
+
+/// Get a copy of an FD by index (read-only).
+pub(super) unsafe fn fd_get(idx: usize) -> VfsFd {
+    if is_kernel_boot() {
+        let p = &raw const G_KERNEL_FDS;
+        (*p)[idx]
+    } else {
+        let p = crate::proc::current();
+        p.fds[idx]
+    }
+}
+
+/// Set FD fields by index.
+pub(super) unsafe fn fd_set(idx: usize, ino: u32, size: u32, fs: Fs, pos: u32) {
+    if is_kernel_boot() {
+        let p = &raw mut G_KERNEL_FDS;
+        (*p)[idx].ino = ino;
+        (*p)[idx].size = size;
+        (*p)[idx].fs = fs;
+        (*p)[idx].pos = pos;
+    } else {
+        let p = crate::proc::current();
+        p.fds[idx].ino = ino;
+        p.fds[idx].size = size;
+        p.fds[idx].fs = fs;
+        p.fds[idx].pos = pos;
+    }
+}
+
+/// Update FD position by index.
+pub(super) unsafe fn fd_update_pos(idx: usize, pos: u32) {
+    if is_kernel_boot() {
+        let p = &raw mut G_KERNEL_FDS;
+        (*p)[idx].pos = pos;
+    } else {
+        let p = crate::proc::current();
+        p.fds[idx].pos = pos;
+    }
+}
+
+/// Mark FD as unused.
+pub(super) unsafe fn fd_clear(idx: usize) {
+    if is_kernel_boot() {
+        let p = &raw mut G_KERNEL_FDS;
+        (*p)[idx].used = false;
+    } else {
+        let p = crate::proc::current();
+        p.fds[idx].used = false;
+    }
 }
 
 pub mod create;

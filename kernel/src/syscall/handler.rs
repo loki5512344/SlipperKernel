@@ -10,7 +10,7 @@ use crate::proc;
 use crate::syscall::abi::*;
 use onyx_core::errno::Errno;
 
-use super::{fs_sys, fs_sys2, proc_sys, ring_sys, snap_sys};
+use super::{fs_sys, fs_sys2, ipc_sys, proc_sys, ring_sys, snap_sys};
 
 const USER_BASE: u64 = 0x10000;
 const USER_TOP: u64 = 0x4000_0000;
@@ -40,7 +40,8 @@ fn syscall_allowed(nr: u64, ring: u8) -> bool {
         // Available to all (ring 2 = user):
         SYS_write | SYS_read | SYS_exit | SYS_yield | SYS_getpid | SYS_sbrk | SYS_open
         | SYS_close | SYS_lseek | SYS_stat | SYS_exec | SYS_readdir | SYS_getring
-        | SYS_dropring | SYS_sigmask | SYS_write_fd => true,
+        | SYS_dropring | SYS_sigmask | SYS_write_fd | SYS_chan_connect | SYS_chan_send
+        | SYS_chan_recv | SYS_chan_close => true,
         // Root-only (ring 0 or 1):
         SYS_spawn
         | SYS_wait
@@ -49,7 +50,8 @@ fn syscall_allowed(nr: u64, ring: u8) -> bool {
         | SYS_snapshot_list
         | SYS_kill
         | SYS_create
-        | SYS_mkdir => ring <= proc::PROC_RING_ROOT,
+        | SYS_mkdir
+        | SYS_chan_create => ring <= proc::PROC_RING_ROOT,
         // Stubbed:
         SYS_brk | SYS_mmap => false,
         _ => false,
@@ -94,6 +96,11 @@ pub unsafe fn handle(tf: &mut TrapFrame) -> i64 {
         SYS_write_fd => fs_sys2::sys_write_fd(a0, a1, a2),
         SYS_create => fs_sys2::sys_create(a0, a1, a2),
         SYS_mkdir => fs_sys2::sys_mkdir(a0),
+        SYS_chan_create => ipc_sys::sys_chan_create(),
+        SYS_chan_connect => ipc_sys::sys_chan_connect(a0 as u32),
+        SYS_chan_send => ipc_sys::sys_chan_send(a0 as u32, a1, a2),
+        SYS_chan_recv => ipc_sys::sys_chan_recv(a0 as u32, a1, a2),
+        SYS_chan_close => ipc_sys::sys_chan_close(a0 as u32),
         SYS_brk | SYS_mmap => Errno::NoSys.as_i64(),
         _ => Errno::NoSys.as_i64(),
     }

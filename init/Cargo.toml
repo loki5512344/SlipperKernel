@@ -7,3 +7,11 @@ license.workspace = true
 [[bin]]
 name = "onyx-init"
 path = "src/main.rs"
+
+[[bin]]
+name = "onyx-osh"
+path = "src/osh.rs"
+
+[[bin]]
+name = "onyx-login"
+path = "src/login.rs"

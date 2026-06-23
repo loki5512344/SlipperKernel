@@ -13,6 +13,8 @@ pub const PROC_RING_USER: u8 = 2;
 
 pub const PROC_PID_INIT: u32 = 1;
 pub const KSTACK_SIZE: usize = 16 * 1024;
+/// Maximum number of open file descriptors per process.
+pub const PROC_MAX_FDS: usize = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ProcState {
@@ -46,6 +48,8 @@ pub struct Proc {
     /// Bitmask of blocked signals. Pending signals in this mask are kept
     /// pending until unblocked. Signal 9 (KILL) cannot be blocked.
     pub signal_mask: u32,
+    /// Per-process file descriptor table — VFS open files.
+    pub fds: [crate::fs::vfs::VfsFd; PROC_MAX_FDS],
     /// Linked list pointer — next process in the global list.
     pub next: *mut Proc,
 }
@@ -68,6 +72,15 @@ impl Proc {
             kstack: [0; KSTACK_SIZE],
             pending_signals: 0,
             signal_mask: 0,
+            fds: [crate::fs::vfs::VfsFd {
+                ino: 0,
+                size: 0,
+                pos: 0,
+                fs: crate::fs::vfs::Fs::None,
+                used: false,
+                perms: 0,
+                epoch: 0,
+            }; PROC_MAX_FDS],
             next: ptr::null_mut(),
         }
     }

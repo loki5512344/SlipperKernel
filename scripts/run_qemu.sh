@@ -21,14 +21,17 @@ cargo build --release -p onyx_kernel --target riscv64gc-unknown-none-elf 2>&1 | 
 cargo build --release -p onyx_init --target riscv64gc-unknown-none-elf 2>&1 | tail -3
 cargo build --release -p onyx_tools 2>&1 | tail -3
 
-# Build init.onx (ring=1 for root space)
+# Convert all userland ELFs to .onx
 BUILD="$ROOT/build"
 mkdir -p "$BUILD"
-echo "==> Converting init ELF → .onx (ring=1)"
+echo "==> Converting userland ELFs → .onx"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-init" "$BUILD/init.onx"
+"$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-login" "$BUILD/login.onx"
+"$ROOT/target/release/elf2onx" "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-osh" "$BUILD/osh.onx"
 
+# Create OnyxFS disk image using manifest
 echo "==> Creating OnyxFS disk image"
-"$ROOT/target/release/mkimage" "$BUILD/init.onx" "$BUILD/disk.img"
+"$ROOT/target/release/mkimage" "$BUILD/manifest.txt" "$BUILD/disk.img"
 
 # Create partitioned boot disk
 echo "==> Creating partitioned boot disk"

@@ -26,6 +26,10 @@ pub(super) unsafe fn alloc_proc() -> KResult<*mut Proc> {
     (*p).tf = TrapFrame::zero();
     (*p).pending_signals = 0;
     (*p).signal_mask = 0;
+    // Initialize per-process FD table — all slots free.
+    for fd in (*p).fds.iter_mut() {
+        *fd = crate::fs::vfs::VfsFd::default();
+    }
     (*p).next = G_PROC_LIST;
     G_PROC_LIST = p;
     Ok(p)

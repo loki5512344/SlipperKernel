@@ -51,6 +51,7 @@ extern crate onyx_core;
 pub mod arch;
 pub mod drivers;
 pub mod fs;
+pub mod ipc;
 pub mod libfdt;
 pub mod mm;
 pub mod proc;
