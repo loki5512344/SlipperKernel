@@ -26,8 +26,18 @@ echo "==> Converting userland ELFs → .onx"
 "$ROOT/target/release/elf2onx" "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-passwd" "$BUILD/passwd.onx"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-useradd" "$BUILD/useradd.onx"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-userdel" "$BUILD/userdel.onx"
+"$ROOT/target/release/elf2onx" "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-argv-test" "$BUILD/argv_test.onx"
 
 # No default passwd/shadow — first boot creates them interactively.
+
+# Build OnyxCC .onx
+echo "==> Building OnyxCC"
+ONYXCCDIR="$ROOT/../OnyxCompiller"
+if [ -f "$ONYXCCDIR/onyxcc.onx" ]; then
+    cp "$ONYXCCDIR/onyxcc.onx" "$BUILD/onyxcc.onx"
+else
+    echo "onyxcc.onx not found — skipping"
+fi
 
 # Generate PSF1 font
 echo "==> Generating font"
@@ -48,6 +58,9 @@ file $BUILD/passwd.onx /bin/passwd
 file $BUILD/useradd.onx /bin/useradd --ring=1
 file $BUILD/userdel.onx /bin/userdel --ring=1
 file $BUILD/default.psf /font/default.psf
+file $BUILD/onyxcc.onx /bin/onyxcc --ring=1
+file $BUILD/argv_test.onx /bin/argv_test
+file /home/loki/Projects/Onyx/OnyxCompiller/tests/hello_full.c /tmp/test.c
 EOF
 
 # Create OnyxFS disk image using manifest
@@ -66,9 +79,10 @@ SLBA=10240
 dd if="$BUILD/disk.img" of="$BUILD/boot.img" bs=512 seek=$SLBA conv=notrunc 2>/dev/null
 
 echo "==> Starting QEMU"
+QEMU_DISPLAY="${QEMU_DISPLAY:-none}"
 qemu-system-riscv64 \
-    -M virt -m 256M \
+    -M virt -m 256M -smp 2 \
     -bios "$BOOT_DIR/bootloader.bin" \
     -drive file="$BUILD/boot.img",format=raw,if=none,id=drive0 \
     -device virtio-blk-device,drive=drive0 \
-    -display none -serial mon:stdio -no-reboot
+    -nographic -no-reboot

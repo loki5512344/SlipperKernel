@@ -1,7 +1,7 @@
 //! kmain — точка входа в S-mode.
 use crate::arch::csr;
 use crate::arch::regs::*;
-use crate::drivers::{plic, uart, virtio};
+use crate::drivers::{fb, pci, plic, uart, virtio};
 use crate::fs::vfs;
 use crate::libfdt::fdt;
 use crate::mm::{heap, pmm, vmm};
@@ -10,7 +10,7 @@ use crate::srv::{timer, trap};
 use onyx_core::errno::KResult;
 use onyx_core::fmt::Arg;
 
-const BANNER: &str = "\n  ___ _ _                  _\n / __(_) |_ _____ __ _____| |__\n \\__ \\ | \\ V / -_) V /___| / /_\n |___/_|_|\\_/\\___|\\_/    |_\\__/\n  OnyxKernel v0.3 (Rust) — RISC-V 64 GC\n\n";
+const BANNER: &str = "\n\x1b[32m░█▀█░█▀█░█░█░█░█\n░█░█░█░█░░█░░▄▀▄\n░▀▀▀░▀░▀░░▀░░▀░▀\x1b[0m\n  OnyxKernel v0.3 (Rust) — RISC-V 64 GC\n\n";
 
 pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
     uart::init_default();
@@ -65,6 +65,33 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         }
     }
     crate::kinf!("virtio-blk", "%d device(s)", Arg::from(ndevs));
+
+    // Init framebuffer: try PCI VGA first, fall back to allocated pages
+    let fb_pa = pci::find_vga_fb().ok().filter(|&pa| pa != 0).or_else(|| {
+        let fb_pages = (fb::FB_SIZE + 4095) / 4096;
+        pmm::alloc_n(fb_pages).ok().map(|pa| {
+            crate::kinf!("fb", "allocated at %p", Arg::from(pa));
+            pa as usize
+        })
+    });
+    if let Some(pa) = fb_pa {
+        if fb::init(pa).is_ok() {
+            crate::kinf!("fb", "init ok");
+        } else {
+            crate::kwrn!("fb", "init failed");
+        }
+    }
+    if fb::enabled() {
+        fb::clear();
+        let banner = "\n░█▀█░█▀█░█░█░█░█\n░█░█░█░█░░█░░▄▀▄\n░▀▀▀░▀░▀░░▀░░▀░▀\n  OnyxKernel v0.3 (Rust) — RISC-V 64 GC\n\n";
+        let mut y = 40usize;
+        for line in banner.lines() {
+            let x = (fb::FB_WIDTH - line.len() * 8) / 2;
+            fb::draw_str(x, y, line, 0x00FF00, 0x000000);
+            y += 16;
+        }
+        fb::draw_str(10, y + 8, "Booting...", 0x00AAAA, 0x000000);
+    }
 
     vfs::init();
     if ndevs > 0 {
@@ -153,6 +180,8 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         0,
         r.heap_brk,
         ring,
+        0,
+        0,
     ) {
         crate::kerr!("kmain", "create_user failed: %s", Arg::from(e.as_str()));
         crate::srv::klog::halt();
@@ -165,7 +194,6 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         Arg::from(r.entry),
         Arg::from(ring as u32)
     );
-    // Release secondary harts for SMP.
     crate::arch::smp::release_secondary_harts();
     proc::enter_user(1);
 }

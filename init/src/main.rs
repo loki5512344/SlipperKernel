@@ -59,7 +59,7 @@ pub unsafe extern "C" fn _start() -> ! {
         path[9..9 + name_len].copy_from_slice(&name_buf[..name_len]);
 
         // Spawn the service in root space (ring 1).
-        let pid = syscalls::spawn(path.as_ptr(), 1); // ring_hint=1 (ROOT)
+        let pid = syscalls::spawn(path.as_ptr(), core::ptr::null(), 1);
         if pid > 0 {
             syscalls::write(1, b"[init] + service ".as_ptr(), 17);
             syscalls::write(1, name_buf.as_ptr(), name_len);
@@ -84,10 +84,7 @@ pub unsafe extern "C" fn _start() -> ! {
     // Launch /bin/login.
     let login = b"/bin/login\0";
     syscalls::write(1, b"[init] launching /bin/login\n".as_ptr(), 28);
-    let login_pid = syscalls::spawn(login.as_ptr(), 1);
-    if login_pid <= 0 {
-        syscalls::write(1, b"[init:ERR] login spawn failed\n".as_ptr(), 31);
-    }
+    let _login_pid = syscalls::spawn(login.as_ptr(), core::ptr::null(), 1);
 
     // Reaper loop: wait for children.
     let mut status: i32 = 0;

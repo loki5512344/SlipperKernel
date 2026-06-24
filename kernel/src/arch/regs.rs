@@ -55,6 +55,9 @@ pub const fn sv39_l0_idx(va: u64) -> usize {
 pub const CLINT_BASE: u64 = 0x0200_0000;
 pub const CLINT_MTIMECMP: u64 = CLINT_BASE + 0x4000;
 pub const CLINT_MTIME: u64 = CLINT_BASE + 0xBFF8;
+pub const fn clint_mtimecmp_hart(hart: usize) -> u64 {
+    CLINT_BASE + 0x4000 + 8 * hart as u64
+}
 pub const CLINT_FREQ_QEMU: u64 = 10_000_000;
 pub const PLIC_BASE: u64 = 0x0C00_0000;
 #[inline]

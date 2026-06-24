@@ -31,3 +31,7 @@ path = "src/userdel.rs"
 [[bin]]
 name = "onyx-hello"
 path = "src/hello.rs"
+
+[[bin]]
+name = "onyx-argv-test"
+path = "src/argv_test.rs"

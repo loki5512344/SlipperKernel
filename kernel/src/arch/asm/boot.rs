@@ -9,9 +9,10 @@ global_asm!(
 .section .text.boot
 .global _start
 _start:
-    bnez a0, park
+    csrr tp, mhartid
+    bnez tp, park
     la t0, {saved_hartid}
-    sd a0, 0(t0)
+    sd tp, 0(t0)
     la t0, {saved_fdt}
     sd a1, 0(t0)
     la t0, {bss_start}
@@ -44,20 +45,8 @@ _start:
     csrw satp, zero
     mret
 park:
-    la t0, secondary_release
-    ld t0, 0(t0)
-    beqz t0, park_wait
     la t0, secondary_entry
     jr t0
-park_wait:
-    wfi
-    j park
-
-.section .data
-.balign 8
-.global secondary_release
-secondary_release:
-    .dword 0
 "#,
     saved_hartid = sym SAVED_HARTID,
     saved_fdt = sym SAVED_FDT,

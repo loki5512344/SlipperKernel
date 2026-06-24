@@ -76,7 +76,7 @@ pub unsafe extern "C" fn _start() -> ! {
         syscalls::write(1, b"Login OK\n".as_ptr(), 9);
         syscalls::dropping(2);
         let shell = b"/bin/osh\0";
-        syscalls::exec(shell.as_ptr());
+        syscalls::exec(shell.as_ptr(), core::ptr::null());
         syscalls::write(1, b"login: exec failed\n".as_ptr(), 19);
     }
 }

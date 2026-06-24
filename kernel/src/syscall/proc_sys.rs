@@ -21,7 +21,7 @@ pub(super) unsafe fn sys_getpid() -> i64 {
 }
 
 /// SYS_spawn: create new process from .onx file.
-pub(super) unsafe fn sys_spawn(path: u64, ring_hint: u8) -> i64 {
+pub(super) unsafe fn sys_spawn(_tf: &mut TrapFrame, path: u64, argv: u64, ring_hint: u8) -> i64 {
     if !user_ptr_ok(path, 1) {
         return Errno::Inval.as_i64();
     }
@@ -32,7 +32,7 @@ pub(super) unsafe fn sys_spawn(path: u64, ring_hint: u8) -> i64 {
     }
     let path_bytes = core::slice::from_raw_parts(p, len);
     let parent_pid = proc::current_pid();
-    match proc::spawn(path_bytes, ring_hint, parent_pid) {
+    match proc::spawn(path_bytes, argv, ring_hint, parent_pid) {
         Ok(pid) => pid as i64,
         Err(e) => e.as_i64(),
     }

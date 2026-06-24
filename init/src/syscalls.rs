@@ -57,9 +57,9 @@ pub unsafe fn getpid() -> i64 {
 }
 
 #[inline]
-pub unsafe fn spawn(path: *const u8, ring_hint: u8) -> i64 {
+pub unsafe fn spawn(path: *const u8, argv: *const u64, ring_hint: u8) -> i64 {
     let ret: i64;
-    asm!("ecall", in("a7") SYS_SPAWN, in("a0") path as usize, in("a1") ring_hint as usize, lateout("a0") ret);
+    asm!("ecall", in("a7") SYS_SPAWN, in("a0") path as usize, in("a1") argv as usize, in("a2") ring_hint as usize, lateout("a0") ret);
     ret
 }
 
@@ -106,9 +106,9 @@ pub unsafe fn close(fd: u64) -> i64 {
 }
 
 #[inline]
-pub unsafe fn exec(path: *const u8) -> i64 {
+pub unsafe fn exec(path: *const u8, argv: *const u64) -> i64 {
     let ret: i64;
-    asm!("ecall", in("a7") SYS_EXEC, in("a0") path as usize, lateout("a0") ret);
+    asm!("ecall", in("a7") SYS_EXEC, in("a0") path as usize, in("a1") argv as usize, lateout("a0") ret);
     ret
 }
 

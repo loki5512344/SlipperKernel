@@ -43,6 +43,15 @@ unsafe fn write_mtimecmp(v: u64) {
     Mmio::<u32>::at(G_MTIMECMP + 4).write((v >> 32) as u32);
 }
 
+pub unsafe fn init_hart(hartid: usize) {
+    let cmp_addr = clint_mtimecmp_hart(hartid) as usize;
+    let now = read_mtime();
+    let next = now + G_TICK_INTERVAL;
+    Mmio::<u32>::at(cmp_addr + 4).write(0xFFFF_FFFF);
+    Mmio::<u32>::at(cmp_addr).write(next as u32);
+    Mmio::<u32>::at(cmp_addr + 4).write((next >> 32) as u32);
+}
+
 pub unsafe fn handle() {
     G_UPTICKS = G_UPTICKS.wrapping_add(1);
     G_JIFFIES = G_JIFFIES.wrapping_add(1);

@@ -23,10 +23,13 @@ pub unsafe fn set_need_resched(v: bool) {
     NEED_RESCHED = v;
 }
 
+pub unsafe fn is_idle() -> bool {
+    G_CURRENT.is_null()
+}
+
 pub unsafe fn sched_yield(tf: &mut TrapFrame) {
     if G_CURRENT.is_null() {
-        crate::srv::klog::puts("proc: no current process, halting\n");
-        crate::srv::klog::halt();
+        return;
     }
     (*G_CURRENT).tf = *tf;
     if matches!((*G_CURRENT).state, ProcState::Running) {
@@ -59,16 +62,10 @@ pub unsafe fn sched_yield(tf: &mut TrapFrame) {
         }
     }
     if next.is_null() {
-        // No ready process. If the current process is Exited or Waiting, the
-        // system is deadlocked (no one can make progress) — halt. Otherwise
-        // (current is Running), keep running the current process.
-        if matches!((*G_CURRENT).state, ProcState::Exited | ProcState::Waiting) {
-            crate::srv::klog::puts("proc: no ready processes, halting\n");
-            crate::srv::klog::halt();
+        if !G_CURRENT.is_null() {
+            (*G_CURRENT).state = ProcState::Running;
         }
-        (*G_CURRENT).state = ProcState::Running;
         NEED_RESCHED = false;
-        *tf = (*G_CURRENT).tf;
         return;
     }
     if (*next).tf.sepc == 0 {

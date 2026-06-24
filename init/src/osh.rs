@@ -134,15 +134,34 @@ unsafe fn do_ls(path: &[u8]) {
     }
 }
 
-unsafe fn do_exec(path: &[u8]) {
-    let mut buf = [0u8; 64];
-    if path.len() >= buf.len() {
-        return;
+unsafe fn do_exec(cmdline: &[u8]) {
+    let mut path_buf = [0u8; 64];
+    let path = split_first_word(cmdline).0;
+    if path.len() >= path_buf.len() { return; }
+    for (i, &b) in path.iter().enumerate() { path_buf[i] = b; }
+
+    // Build argv array on stack: argv[0]=path, argv[1..]=rest tokens, NULL
+    let mut argv = [core::ptr::null::<u8>(); 16];
+    let mut argc = 0usize;
+    let mut rest = cmdline;
+    while argc < argv.len() - 1 {
+        let (tok, tail) = split_first_word(rest);
+        if tok.is_empty() { break; }
+        // Store token pointer (points into cmdline which lives in buf)
+        argv[argc] = tok.as_ptr();
+        argc += 1;
+        rest = tail;
+        if tok.as_ptr() == cmdline.as_ptr() { continue; } // skip first token
     }
-    for (i, &b) in path.iter().enumerate() {
-        buf[i] = b;
+
+    // Build argv_ptr array for syscall (array of pointers, NULL-terminated)
+    let mut argv_ptrs = [0u64; 17];
+    for i in 0..argc {
+        argv_ptrs[i] = argv[i] as u64;
     }
-    syscalls::exec(buf.as_ptr());
+    argv_ptrs[argc] = 0;
+
+    syscalls::exec(path_buf.as_ptr(), argv_ptrs.as_ptr());
     let m = b"exec: failed\n";
     syscalls::write(1, m.as_ptr(), m.len());
 }

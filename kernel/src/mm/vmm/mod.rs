@@ -24,6 +24,7 @@ pub unsafe fn install_root(root_pa: u64) {
 
 pub unsafe fn init() -> KResult<u64> {
     let root_pa = new_root()?;
+    crate::arch::smp::G_KERNEL_ROOT_PA = root_pa;
     let root = root_pa as *mut u64;
     let leaf_flags = PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D;
     for i in 0..3u64 {

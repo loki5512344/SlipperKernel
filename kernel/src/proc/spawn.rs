@@ -23,6 +23,8 @@ pub unsafe fn create_user(
     parent_pid: u32,
     heap_brk: u64,
     ring: u8,
+    argc: usize, 
+    argv_sp: u64,
 ) -> KResult<()> {
     if entry == 0 {
         crate::kerr!("create_user", "entry=0 — would cause page fault, rejecting");
@@ -44,16 +46,16 @@ pub unsafe fn create_user(
     (*p).pending_signals = 0;
     (*p).signal_mask = 0;
     (*p).tf.sepc = entry;
-    (*p).tf.sp = ustack;
-    (*p).tf.a0 = 0;
-    (*p).tf.a1 = ustack - 256;
+    (*p).tf.sp = if argc > 0 { argv_sp } else { ustack };
+    (*p).tf.a0 = argc as u64;
+    (*p).tf.a1 = if argc > 0 { argv_sp + 8 } else { 0 };
     (*p).tf.sstatus = SSTATUS_SPIE;
     (*p).tf.satp = SATP_MODE_SV39 | (root_pa >> 12);
     Ok(())
 }
 
 /// **SYS_spawn**: create a new process from .onx file without replacing current.
-pub unsafe fn spawn(path: &[u8], ring_hint: u8, parent_pid: u32) -> KResult<u32> {
+pub unsafe fn spawn(path: &[u8], argv_user: u64, ring_hint: u8, parent_pid: u32) -> KResult<u32> {
     use crate::fs::vfs;
     let token = vfs::open(path, vfs::PERM_READ | vfs::PERM_SEEK)?;
     let mut size = 0u32;
@@ -73,8 +75,13 @@ pub unsafe fn spawn(path: &[u8], ring_hint: u8, parent_pid: u32) -> KResult<u32>
     } else {
         PROC_RING_USER
     };
+    let (argc, argv_sp) = if argv_user != 0 {
+        crate::proc::onx::copy_argv_to_stack(r.root_pa, r.ustack, argv_user)
+    } else {
+        (0, 0)
+    };
     create_user(
-        r.entry, r.ustack, r.root_pa, new_pid, parent_pid, r.heap_brk, ring,
+        r.entry, r.ustack, r.root_pa, new_pid, parent_pid, r.heap_brk, ring, argc, argv_sp,
     )?;
     Ok(new_pid)
 }
