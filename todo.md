@@ -16,6 +16,11 @@
 13. **Signal delivery** — SYS_kill, SIGKILL terminates
 14. **Рефакторинг** — все файлы ≤150 строк
 15. **QEMU verified** — ядро грузится, init работает в ring 1
+16. **onx::load BSS page-fault fix** — `PTE_A | PTE_D` теперь выставляются для всех
+    user-leaf PTE в сегментах / стеке / куче (раньше `map_one_pub` вызывался
+    без A/D, что под QEMU с `menvcfg.ADUE = 0` приводило к page fault на
+    первом обращении — типичный симптом: `onyxcc` падал на доступе к BSS
+    по адресу `0x199f0`, где располагается первый глобал 1.2 MB сегмента).
 
 ## ❌ Осталось сделать:
 

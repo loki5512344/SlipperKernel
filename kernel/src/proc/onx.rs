@@ -37,6 +37,13 @@ pub unsafe fn load(image: *const u8, image_size: usize) -> KResult<OnxLoadResult
     }
 
     // Map each segment.
+    //
+    // We always OR in PTE_A | PTE_D alongside PTE_U: QEMU's RISC-V machine
+    // starts with menvcfg.ADUE = 0, which means the CPU will trap (page
+    // fault) on the first access to a leaf PTE whose A bit is clear, instead
+    // of setting A/D in hardware. Without these bits every userspace load
+    // or store faults on first touch. This matches what vmm::map and
+    // vmm::map_anon already do for their own callers.
     for s in &hdr.segs {
         if s.vaddr < USER_BASE || s.vaddr >= USER_TOP {
             return Err(Errno::Range);
@@ -48,6 +55,7 @@ pub unsafe fn load(image: *const u8, image_size: usize) -> KResult<OnxLoadResult
             return Err(Errno::Range);
         }
 
+        let seg_flags = (s.flags as u64) | PTE_U | PTE_A | PTE_D;
         let mut va = s.vaddr;
         let end = s.vaddr + s.memsz;
         let mut file_pos: u64 = 0;
@@ -57,7 +65,7 @@ pub unsafe fn load(image: *const u8, image_size: usize) -> KResult<OnxLoadResult
             let mut page_pa = 0;
             if existing == 0 {
                 page_pa = pmm::alloc_zero()?;
-                vmm::map_one_pub(root_pa, page_base, page_pa, (s.flags as u64) | PTE_U, 0)?;
+                vmm::map_one_pub(root_pa, page_base, page_pa, seg_flags, 0)?;
             }
             let page_end = page_base + 4096;
             let page_va_end = page_end.min(end);
@@ -78,12 +86,16 @@ pub unsafe fn load(image: *const u8, image_size: usize) -> KResult<OnxLoadResult
     }
 
     // User stack.
+    // Same A/D reasoning as for segment mapping above: QEMU starts with
+    // menvcfg.ADUE = 0, so we must set PTE_A | PTE_D ourselves or the very
+    // first stack push (e.g. by `drop_to_user` returning to user _start)
+    // traps as a store page fault.
     let ustack_top = USER_TOP;
     let ustack_bottom = ustack_top - (USER_STACK_PAGES as u64) * 4096;
     let mut va = ustack_bottom;
     while va < ustack_top {
         let page_pa = pmm::alloc_zero()?;
-        vmm::map_one_pub(root_pa, va, page_pa, PTE_V | PTE_R | PTE_W | PTE_U, 0)?;
+        vmm::map_one_pub(root_pa, va, page_pa, PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D, 0)?;
         va += 4096;
     }
 
@@ -93,7 +105,7 @@ pub unsafe fn load(image: *const u8, image_size: usize) -> KResult<OnxLoadResult
     let mut va = heap_bottom;
     while va < heap_top {
         let page_pa = pmm::alloc_zero()?;
-        vmm::map_one_pub(root_pa, va, page_pa, PTE_V | PTE_R | PTE_W | PTE_U, 0)?;
+        vmm::map_one_pub(root_pa, va, page_pa, PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D, 0)?;
         va += 4096;
     }
 
