@@ -5,8 +5,8 @@
 //! is SYS_wait: it blocks the caller until a child exits, then reaps it.
 use super::lifecycle::{alloc_proc, free_proc};
 use super::process::{
-    alloc_pid, by_pid, current_pid, ProcState, G_CURRENT, G_PROC_LIST, PROC_RING_ROOT,
-    PROC_RING_USER,
+    alloc_pid, by_pid, current_for_hart, current_pid, hart_id, ProcState, G_PROC_LIST,
+    PROC_RING_ROOT, PROC_RING_USER,
 };
 use crate::arch::regs::*;
 use crate::arch::trap_frame::TrapFrame;
@@ -132,7 +132,11 @@ pub unsafe fn wait(tf: &mut TrapFrame, status_out: *mut i32) -> KResult<u32> {
     // or, if no other process can run, halts the kernel (deadlock detected).
     // The `Err` below is unreachable in practice but keeps the type system
     // happy.
-    (*G_CURRENT).state = ProcState::Waiting;
+    let hartid = hart_id();
+    let cur = current_for_hart(hartid);
+    if !cur.is_null() {
+        (*cur).state = ProcState::Waiting;
+    }
     super::scheduler::sched_yield(tf);
     Err(Errno::NoEnt)
 }

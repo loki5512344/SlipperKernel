@@ -92,14 +92,39 @@ impl Proc {
 
 /// Head of the process linked list.
 pub(super) static mut G_PROC_LIST: *mut Proc = ptr::null_mut();
-/// Currently running process (pointer into the list).
+
+/// Maximum number of harts supported.
+pub const MAX_HARTS: usize = crate::arch::smp::MAX_HARTS;
+
+/// Per-hart currently running process. `null` when the hart is idle.
+pub(super) static mut G_HART_CURRENT: [*mut Proc; MAX_HARTS] = [ptr::null_mut(); MAX_HARTS];
+
+/// Per-hart saved trap frame for the idle loop. When a secondary hart
+/// switches from idle to a user process, the idle trap frame is saved here
+/// so it can be restored when the process exits and no replacement is found.
+pub(super) static mut G_HART_IDLE_TF: [TrapFrame; MAX_HARTS] = [TrapFrame::zero(); MAX_HARTS];
+
+/// Legacy single-hart current (always equals G_HART_CURRENT[0]).
+/// Kept for compatibility; prefer `current_for_hart()`.
 pub(super) static mut G_CURRENT: *mut Proc = ptr::null_mut();
+
 /// Next PID to allocate.
 pub(super) static mut G_NEXT_PID: u32 = PROC_PID_INIT;
+
+/// Read the current hart ID from the `tp` register.
+#[inline]
+pub fn hart_id() -> usize {
+    let id: usize;
+    unsafe { core::arch::asm!("mv {0}, tp", out(reg) id) }
+    id
+}
 
 pub unsafe fn init() {
     G_PROC_LIST = ptr::null_mut();
     G_CURRENT = ptr::null_mut();
+    for i in 0..MAX_HARTS {
+        G_HART_CURRENT[i] = ptr::null_mut();
+    }
     G_NEXT_PID = PROC_PID_INIT;
 }
 
@@ -111,14 +136,33 @@ pub(super) fn alloc_pid() -> u32 {
     }
 }
 
+/// Get the current process pointer for a specific hart.
+pub unsafe fn current_for_hart(hartid: usize) -> *mut Proc {
+    if hartid < MAX_HARTS {
+        G_HART_CURRENT[hartid]
+    } else {
+        ptr::null_mut()
+    }
+}
+
+/// Set the current process pointer for a specific hart.
+pub unsafe fn set_current_for_hart(hartid: usize, p: *mut Proc) {
+    if hartid < MAX_HARTS {
+        G_HART_CURRENT[hartid] = p;
+        if hartid == 0 {
+            G_CURRENT = p;
+        }
+    }
+}
+
 pub fn current_pid() -> u32 {
     unsafe {
-        if G_CURRENT.is_null() {
+        let p = G_HART_CURRENT[hart_id()];
+        if p.is_null() {
             return 0;
         }
-        let p = &*G_CURRENT;
-        if matches!(p.state, ProcState::Running) {
-            p.pid
+        if matches!((*p).state, ProcState::Running) {
+            (*p).pid
         } else {
             0
         }
@@ -127,15 +171,17 @@ pub fn current_pid() -> u32 {
 
 pub fn current_ring() -> u8 {
     unsafe {
-        if G_CURRENT.is_null() {
+        let p = G_HART_CURRENT[hart_id()];
+        if p.is_null() {
             return PROC_RING_KERNEL;
         }
-        (*G_CURRENT).ring
+        (*p).ring
     }
 }
 
 pub unsafe fn current() -> &'static mut Proc {
-    &mut *G_CURRENT
+    let p = G_HART_CURRENT[hart_id()];
+    &mut *p
 }
 
 pub unsafe fn by_pid(pid: u32) -> Option<&'static mut Proc> {
@@ -147,4 +193,30 @@ pub unsafe fn by_pid(pid: u32) -> Option<&'static mut Proc> {
         cur = (*cur).next;
     }
     None
+}
+
+/// Dump all active processes to a `Write` implementor (for kdump).
+pub fn dump_all<W: onyx_core::fmt::Write>(w: &mut W) {
+    unsafe {
+        let mut cur = G_PROC_LIST;
+        while !cur.is_null() {
+            if !matches!((*cur).state, ProcState::Free) {
+                let state_str = match (*cur).state {
+                    ProcState::Ready => "Ready",
+                    ProcState::Running => "Running",
+                    ProcState::Exited => "Exited",
+                    ProcState::Waiting => "Waiting",
+                    _ => "???",
+                };
+                let args: &[onyx_core::fmt::Arg] = &[
+                    onyx_core::fmt::Arg::from((*cur).pid),
+                    onyx_core::fmt::Arg::from(state_str),
+                    onyx_core::fmt::Arg::from((*cur).ring as u32),
+                    onyx_core::fmt::Arg::from((*cur).parent_pid),
+                ];
+                onyx_core::fmt::vformat(w, "    pid=%d state=%s ring=%d ppid=%d\n", args);
+            }
+            cur = (*cur).next;
+        }
+    }
 }

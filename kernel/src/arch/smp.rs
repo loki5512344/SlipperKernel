@@ -56,15 +56,19 @@ pub unsafe extern "Rust" fn secondary_entry() -> ! {
 }
 
 /// Runs in S-mode with Sv39 paging active.
+///
+/// Initializes trap handling, per-hart timer, and enters the scheduler
+/// idle loop so this hart can pick up Ready processes.
 #[unsafe(no_mangle)]
 pub unsafe extern "Rust" fn secondary_kmain() -> ! {
     let hartid: usize;
     core::arch::asm!("mv {0}, tp", out(reg) hartid);
     *(&raw mut G_ONLINE_HARTS) += 1;
 
-    loop {
-        core::arch::asm!("wfi");
-    }
+    // Enter the scheduler — sets up stvec, sscratch, timer, and
+    // parks in a wfi loop. Timer interrupts will trigger sched_yield()
+    // which may assign a Ready process to this hart.
+    crate::proc::scheduler::sched_enter_idle()
 }
 
 pub fn online_harts() -> u32 {

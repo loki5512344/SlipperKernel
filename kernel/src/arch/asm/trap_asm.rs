@@ -90,7 +90,7 @@ trap_return:
     ld t0, 248(sp)
     csrw sepc, t0
     ld t0, 256(sp)
-    li t1, ~((1 << 1) | (1 << 8))
+    li t1, ~(1 << 1)
     and t0, t0, t1
     csrw sstatus, t0
     addi t1, sp, 288

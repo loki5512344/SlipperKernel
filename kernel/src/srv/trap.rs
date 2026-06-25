@@ -102,6 +102,9 @@ pub unsafe fn handle(tf: &mut TrapFrame) {
         if let Some(p) = proc::by_pid(pid) {
             if matches!(p.state, proc::ProcState::Exited) {
                 proc::sched_yield(tf);
+                // sched_yield returns only if it couldn't context-switch away.
+                // For secondary harts, sched_yield switches to idle (never returns).
+                // If we reach here, no runnable process exists — halt.
                 crate::srv::klog::halt();
             }
         }

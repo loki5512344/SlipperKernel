@@ -21,52 +21,28 @@
     без A/D, что под QEMU с `menvcfg.ADUE = 0` приводило к page fault на
     первом обращении — типичный симптом: `onyxcc` падал на доступе к BSS
     по адресу `0x199f0`, где располагается первый глобал 1.2 MB сегмента).
+17. **Unicode таблица в PSF1/PSF2** — glyph → unicode mapping, glyph_for_unicode(),
+    glyph_bitmap_unicode(), UTF-8 декодирование и рендеринг в framebuffer
+18. **IPC channels** — ipc::channel с create/create_named/open_by_name/connect/send/recv/close,
+    блокирующий wait, ring buffer 4KB, up to 32 channels
+19. **`/ipc/*` VFS** — ipcfs модуль: lookup/stat/read/write/readdir, mounted at /ipc
+20. **FDT parser** — libfdt::fdt с полным DTB walk, find_memory/find_plic/find_clint/find_uart/find_virtio/model
+21. **PLIC IRQ dispatch** — register_handler/dispatch, up to 64 IRQ handlers
+22. **Framebuffer драйвер** — 32bpp, PSF1/PSF2, draw_char/draw_str/scroll/fb_term
+23. **SMP (multi-core)** — secondary hart boot, per-hart current proc, scheduler spinlock,
+    secondary harts enter idle→scheduler loop
+24. **Panic recovery (kdump)** — stack trace (frame pointer walk), process list dump,
+    QEMU reboot via test finisher
 
 ## ❌ Осталось сделать:
 
-### Приоритет 1 — Userland:
-- [x] **`/bin/login`** — аутентификация (root + пользователи из /etc/passwd), dropring(USER), exec(/bin/osh)
-- [x] **`/bin/osh`** — пользовательский shell (ring 2) с командами ls/cat/echo/exec/clear/exit
-- [x] **`/bin/passwd`** — смена пароля (root + self)
-- [x] **`/bin/useradd`** — добавление пользователя (root only)
-- [x] **`/bin/userdel`** — удаление пользователя (root only)
-- [x] **`/etc/passwd`** + `/etc/shadow` — парсинг, аутентификация
-- [x] **`/users/`** — домашние директории пользователей (/users/username/)
-- [x] **Per-process FD table** — уже сделан (per-process VfsFd в Proc)
-- [x] **add_dirent overwrite** — create теперь перезаписывает существующий dirent (вместо дублирования)
-- [x] **First-boot setup** — нет дефолтных паролей; login запрашивает пароль root при первом запуске
-- [x] **mkimage --add/--add-dir** — рекурсивное добавление директорий и отдельных файлов
-
-### Приоритет 2 — /proc/ файловая система:
-- [x] **procfs** — виртуальная ФС с информацией о системе:
-  - /proc/version — версия ядра
-  - /proc/cpuinfo — модель, частота, кол-во ядер
-  - /proc/meminfo — всего ОЗУ, свободно, занято
-  - /proc/uptime — время работы системы
-  - /proc/load — нагрузка на CPU (процессы)
-  - /proc/stat — статистика ядра
-- [x] Интеграция с VFS — монтирование на /proc при старте (mount table / procfs module)
-
-### Приоритет 3 — /font/ и шрифты:
-- [x] **psfgen** — инструмент генерации PSF1 шрифта (256 glyphs, 8x16)
-- [x] **PSF1/PSF2 парсер** — `kernel/src/font/mod.rs` с `font::init()`, `font::glyph_bitmap()`
-- [x] **Загрузка шрифта** — ядро читает `/font/default.psf` после монтирования root
-- [ ] **Поддержка Unicode таблицы** в PSF1/PSF2 (glyph → unicode mapping)
-
-### Приоритет 4 — IPC:
-- [ ] **IPC channels** — chan_create/connect/send/recv для root↔user коммуникации
-- [ ] **`/ipc/*` виртуальный путь** в VFS
-
 ### Приоритет 5 — Драйверы:
-- [ ] **FDT parser** — сейчас hardcoded QEMU адреса, нужен настоящий парсер device tree
-- [ ] **PLIC IRQ dispatch** — сейчас просто log, нужна диспетчеризация прерываний
-- [ ] **Framebuffer драйвер** — вывод на экран + шрифты
-- [ ] **SDHCI драйвер** — для Milk-V Duo S
+- [ ] **SDHCI драйвер** — для Milk-V Duo S (CMD0→CMD8→ACMD41→CMD2→CMD3→CMD9→CMD7→CMD16)
 
 ### Приоритет 6 — Инструменты:
 - [ ] **elf2onx v2** — сейчас пишет v1, нужно использовать v2 формат с compressed_size
 - [ ] **mkimage v2** — создание v2 образов с snapshot area + journal
 
 ### Приоритет 7 — Общее:
-- [ ] **Panic recovery** — сейчас panic = halt, нужен kdump
-- [ ] **Multi-core (SMP)** — сейчас 1 hart
+- [ ] **SMP scheduler improvements** — per-CPU run queues, load balancing, CPU affinity
+- [ ] **Panic recovery improvements** — register dump from trap frame, kernel core dump to disk

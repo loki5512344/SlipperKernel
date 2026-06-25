@@ -10,7 +10,7 @@ use crate::arch::trap_frame::TrapFrame;
 use onyx_core::errno::{Errno, KResult};
 
 use super::lifecycle::exit;
-use super::process::{by_pid, ProcState, G_CURRENT};
+use super::process::{by_pid, current_for_hart, hart_id, ProcState};
 
 /// Signal number for KILL (POSIX SIGKILL = 9). Always honored, never blocked.
 pub const SIG_KILL: u32 = 9;
@@ -38,21 +38,23 @@ pub unsafe fn signal_send(pid: u32, signal: u32) -> KResult<()> {
 /// - Any other signal: clear its bit (MVP — no user-space handlers).
 pub unsafe fn signal_check(tf: &mut TrapFrame) {
     let _ = tf;
-    if G_CURRENT.is_null() {
+    let hartid = hart_id();
+    let cur = current_for_hart(hartid);
+    if cur.is_null() {
         return;
     }
-    let pid = (*G_CURRENT).pid;
+    let pid = (*cur).pid;
     // KILL cannot be blocked — check it first.
-    if (*G_CURRENT).pending_signals & (1u32 << SIG_KILL) != 0 {
-        (*G_CURRENT).pending_signals &= !(1u32 << SIG_KILL);
+    if (*cur).pending_signals & (1u32 << SIG_KILL) != 0 {
+        (*cur).pending_signals &= !(1u32 << SIG_KILL);
         exit(pid, 128 + SIG_KILL as i32);
         super::scheduler::NEED_RESCHED = true;
         return;
     }
-    let pending = (*G_CURRENT).pending_signals & !(*G_CURRENT).signal_mask;
+    let pending = (*cur).pending_signals & !(*cur).signal_mask;
     if pending == 0 {
         return;
     }
     // MVP: no user-space handlers — clear all other pending unblocked signals.
-    (*G_CURRENT).pending_signals &= (*G_CURRENT).signal_mask;
+    (*cur).pending_signals &= (*cur).signal_mask;
 }

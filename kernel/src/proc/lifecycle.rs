@@ -1,6 +1,8 @@
 //! Process lifecycle — allocation, freeing, `enter_user`, `exit`, and `count`.
 use super::process::Proc;
-use super::process::{by_pid, ProcState, G_CURRENT, G_PROC_LIST, PROC_RING_KERNEL};
+use super::process::{
+    by_pid, set_current_for_hart, ProcState, G_PROC_LIST, PROC_RING_KERNEL,
+};
 use crate::arch::trap_frame::TrapFrame;
 use crate::mm::{heap, vmm};
 use core::ptr;
@@ -67,7 +69,9 @@ pub unsafe fn enter_user(pid: u32) -> ! {
         crate::srv::klog::halt();
     }
     (*p).state = ProcState::Running;
-    G_CURRENT = p;
+    // Set per-hart current (hart 0 for the primary bootstrap).
+    let hartid = super::process::hart_id();
+    set_current_for_hart(hartid, p);
     let entry = (*p).entry as usize;
     let ustack = (*p).ustack as usize;
     let root_pa = (*p).root_pa as usize;
