@@ -15,10 +15,10 @@ cargo build --release -p onyx_kernel --target riscv64gc-unknown-none-elf 2>&1 | 
 cargo build --release -p onyx_init --target riscv64gc-unknown-none-elf 2>&1 | tail -3
 cargo build --release -p onyx_tools 2>&1 | tail -3
 
-# Convert all userland ELFs to .onx
+# Convert all userland ELFs to .onx (v2 format is now the default)
 BUILD="$ROOT/build"
 mkdir -p "$BUILD"
-echo "==> Converting userland ELFs → .onx"
+echo "==> Converting userland ELFs → .onx (v2 default)"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-init" "$BUILD/init.onx"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-hello" "$BUILD/hello.onx"
 "$ROOT/target/release/elf2onx" --ring=1 "$ROOT/target/riscv64gc-unknown-none-elf/release/onyx-login" "$BUILD/login.onx"
@@ -63,8 +63,8 @@ file $BUILD/argv_test.onx /bin/argv_test
 file /home/loki/Projects/Onyx/OnyxCompiller/tests/hello_full.c /tmp/test.c
 EOF
 
-# Create OnyxFS disk image using manifest
-echo "==> Creating OnyxFS disk image"
+# Create OnyxFS v2 disk image using manifest (v2 is now the default)
+echo "==> Creating OnyxFS v2 disk image"
 "$ROOT/target/release/mkimage" "$BUILD/manifest.txt" "$BUILD/disk.img"
 
 # Create partitioned boot disk

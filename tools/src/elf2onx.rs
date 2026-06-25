@@ -1,8 +1,8 @@
-//! elf2onx — ELF64 RISC-V → .onx converter with --ring and --v2 flags.
+//! elf2onx — ELF64 RISC-V → .onx converter with --ring, --v1 and --v2 flags.
 //!
 //! Output formats:
-//!   v1 (default): 344-byte header (24 fixed + 8 segments × 40 bytes), max 8 segs.
-//!   v2 (--v2):    32-byte header + dynamic segs × 48 bytes (adds compressed_size).
+//!   v2 (default): 32-byte header + dynamic segs × 48 bytes (adds compressed_size).
+//!   v1 (--v1):    344-byte header (24 fixed + 8 segments × 40 bytes), max 8 segs.
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -71,18 +71,18 @@ impl OnxSegment {
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("usage: elf2onx [--ring=1] [--v2] <input.elf> <output.onx>");
+        eprintln!("usage: elf2onx [--ring=1] [--v1] <input.elf> <output.onx>");
         process::exit(1);
     }
     let mut ring1 = false;
-    let mut v2 = false;
+    let mut v1 = false;
     let mut input = String::new();
     let mut output = String::new();
     for arg in &args[1..] {
         if arg == "--ring=1" {
             ring1 = true;
-        } else if arg == "--v2" {
-            v2 = true;
+        } else if arg == "--v1" {
+            v1 = true;
         } else if input.is_empty() {
             input = arg.clone();
         } else {
@@ -90,9 +90,10 @@ fn main() {
         }
     }
     if input.is_empty() || output.is_empty() {
-        eprintln!("usage: elf2onx [--ring=1] [--v2] <input.elf> <output.onx>");
+        eprintln!("usage: elf2onx [--ring=1] [--v1] <input.elf> <output.onx>");
         process::exit(1);
     }
+    let v2 = !v1;
 
     let mut elf_data = Vec::new();
     File::open(&input)

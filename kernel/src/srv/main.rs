@@ -1,7 +1,7 @@
 //! kmain — точка входа в S-mode.
 use crate::arch::csr;
 use crate::arch::regs::*;
-use crate::drivers::{fb, pci, plic, uart, virtio};
+use crate::drivers::{fb, pci, plic, sdhci, uart, virtio};
 use crate::fs::vfs;
 use crate::libfdt::fdt;
 use crate::mm::{heap, pmm, vmm};
@@ -65,6 +65,22 @@ pub unsafe fn kmain(hartid: usize, fdt_addr: usize) -> ! {
         }
     }
     crate::kinf!("virtio-blk", "%d device(s)", Arg::from(ndevs));
+
+    // Probe SDHCI controller (for Milk-V Duo S / QEMU virt SDHCI)
+    if let Some(sdhci_info) = fdt::find_sdhci() {
+        let sdhci_base = sdhci_info.base as usize;
+        let sdhci_irq = sdhci_info.irq;
+        if sdhci::probe(sdhci_base) {
+            crate::kinf!("sdhci", "found at %p irq=%d", Arg::from(sdhci_base), Arg::from(sdhci_irq));
+            if sdhci::init(sdhci_base, sdhci_irq) {
+                crate::kinf!("sdhci", "SD card initialized");
+            } else {
+                crate::kwrn!("sdhci", "SD card init failed");
+            }
+        } else {
+            crate::kinf!("sdhci", "probe failed at %p", Arg::from(sdhci_base));
+        }
+    }
 
     // Init framebuffer: try PCI VGA first, fall back to allocated pages
     let fb_pa = pci::find_vga_fb().ok().filter(|&pa| pa != 0).or_else(|| {
