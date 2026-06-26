@@ -84,7 +84,18 @@ macro_rules! kpanic { ($tag:expr, $fmt:expr $(, $arg:expr)* $(,)?) => { { $crate
 
 pub use onyx_core::fmt::Arg as FmtArg;
 
-/// Simple delay loop (approximate, for panic reboot).
+pub struct PanicWriter;
+impl onyx_core::fmt::Write for PanicWriter {
+    fn write_str(&mut self, s: &str) {
+        for &b in s.as_bytes() {
+            if b == b'\n' {
+                uart::putc(b'\r');
+            }
+            uart::putc(b);
+        }
+    }
+}
+
 fn delay_loops(n: u64) {
     for _ in 0..n {
         unsafe { core::arch::asm!("nop") }
@@ -95,7 +106,7 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
     unsafe {
         crate::arch::csr::clear_sstatus(crate::arch::regs::SSTATUS_SIE);
     }
-    let mut w = UartWriter;
+    let mut w = PanicWriter;
     w.write_str("\n\n*** KERNEL PANIC ***\n");
     if let Some(loc) = info.location() {
         let args: &[Arg] = &[
@@ -111,62 +122,17 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
         w.write_str(msg);
         w.write_char(b'\n');
     }
-    // kdump: dump CSR state
     unsafe {
-        let sepc = crate::arch::csr::read_sepc();
-        let sstatus = crate::arch::csr::read_sstatus();
-        let scause = crate::arch::csr::read_scause();
-        let stval = crate::arch::csr::read_stval();
-        let args: &[Arg] = &[
-            Arg::from(sepc),
-            Arg::from(sstatus),
-            Arg::from(scause),
-            Arg::from(stval),
-        ];
-        vformat(&mut w, "  sepc=%p sstatus=%p scause=%p stval=%p\n", args);
+        crate::srv::kdump::kdump();
     }
-
-    // kdump: stack trace (frame pointer walk)
-    w.write_str("\n  Stack trace:\n");
-    let mut fp: usize;
-    unsafe { core::arch::asm!("mv {0}, fp", out(reg) fp) }
-    for depth in 0..16 {
-        if fp == 0 || fp < 0x8000_0000 {
-            break;
-        }
-        unsafe {
-            let ra = *((fp + 8) as *const usize);
-            let args: &[Arg] = &[Arg::from(depth as u64), Arg::from(ra as u64)];
-            vformat(&mut w, "    #%d: %p\n", args);
-            fp = *(fp as *const usize);
-        }
-    }
-
-    // kdump: dump current process
-    let pid = crate::proc::current_pid();
-    if pid != 0 {
-        let args: &[Arg] = &[Arg::from(pid)];
-        vformat(&mut w, "  pid=%d\n", args);
-    }
-
-    // kdump: dump process count
-    let cnt = crate::proc::count();
-    let args: &[Arg] = &[Arg::from(cnt)];
-    vformat(&mut w, "  processes=%d\n", args);
-
-    // kdump: dump all active processes
     w.write_str("\n  Active processes:\n");
     crate::proc::dump_all(&mut w);
-
-    // Reboot via QEMU virt test finisher device
     w.write_str("\n  Rebooting in 3 seconds...\n");
     delay_loops(300_000_000);
-    // QEMU virt test finisher: write 0x5555 to 0x100000 for reboot
     unsafe {
         let finisher = 0x100000usize as *mut u32;
         core::ptr::write_volatile(finisher, 0x5555);
     }
-    // If not QEMU (write had no effect), just halt
     halt();
 }
 

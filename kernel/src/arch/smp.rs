@@ -1,8 +1,5 @@
-//! SMP — secondary hart init, per-CPU stacks, release.
-//!
-//! Hart ID is passed from M-mode via the `tp` register (set at `_start`).
-//! Secondary harts wait in M-mode for `G_RELEASE`, transition to S-mode with
-//! the kernel page table (Sv39), and enter the scheduler.
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::hint::spin_loop;
 
 pub const MAX_HARTS: usize = 8;
 pub const SEC_STACK_SIZE: usize = 4096;
@@ -18,12 +15,46 @@ pub static mut G_RELEASE: u64 = 0;
 #[unsafe(no_mangle)]
 pub static mut G_KERNEL_ROOT_PA: u64 = 0;
 
+pub fn current_hart() -> usize {
+    let hartid: usize;
+    unsafe { core::arch::asm!("mv {}, tp", out(reg) hartid); }
+    hartid
+}
+
+static mut G_CPU_ONLINE: [bool; MAX_HARTS] = [true, false, false, false, false, false, false, false];
+
+pub fn cpu_online(hart: usize) -> bool {
+    unsafe { (*(&raw const G_CPU_ONLINE))[hart] }
+}
+
+pub unsafe fn set_cpu_online(hart: usize, v: bool) {
+    (*(&raw mut G_CPU_ONLINE))[hart] = v;
+}
+
+pub struct SpinLock {
+    locked: AtomicBool,
+}
+
+impl SpinLock {
+    pub const fn new() -> Self {
+        SpinLock { locked: AtomicBool::new(false) }
+    }
+    pub fn lock(&self) {
+        while self.locked.swap(true, Ordering::Acquire) {
+            while self.locked.load(Ordering::Relaxed) {
+                spin_loop();
+            }
+        }
+    }
+    pub fn unlock(&self) {
+        self.locked.store(false, Ordering::Release);
+    }
+}
+
 pub unsafe fn release_secondary_harts() {
     core::ptr::write_volatile(core::ptr::addr_of_mut!(G_RELEASE), 1);
 }
 
-/// Called from boot.S `park` loop — runs in M-mode.
-/// Waits for `G_RELEASE` then transitions to S-mode with Sv39.
 #[unsafe(no_mangle)]
 pub unsafe extern "Rust" fn secondary_entry() -> ! {
     let hartid: usize;
@@ -55,19 +86,12 @@ pub unsafe extern "Rust" fn secondary_entry() -> ! {
     );
 }
 
-/// Runs in S-mode with Sv39 paging active.
-///
-/// Initializes trap handling, per-hart timer, and enters the scheduler
-/// idle loop so this hart can pick up Ready processes.
 #[unsafe(no_mangle)]
 pub unsafe extern "Rust" fn secondary_kmain() -> ! {
     let hartid: usize;
     core::arch::asm!("mv {0}, tp", out(reg) hartid);
+    crate::proc::process::set_cpu_online(hartid, true);
     *(&raw mut G_ONLINE_HARTS) += 1;
-
-    // Enter the scheduler — sets up stvec, sscratch, timer, and
-    // parks in a wfi loop. Timer interrupts will trigger sched_yield()
-    // which may assign a Ready process to this hart.
     crate::proc::scheduler::sched_enter_idle()
 }
 

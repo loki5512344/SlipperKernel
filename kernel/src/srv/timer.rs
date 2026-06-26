@@ -50,6 +50,7 @@ pub unsafe fn init_hart(hartid: usize) {
     Mmio::<u32>::at(cmp_addr + 4).write(0xFFFF_FFFF);
     Mmio::<u32>::at(cmp_addr).write(next as u32);
     Mmio::<u32>::at(cmp_addr + 4).write((next >> 32) as u32);
+    csr::set_sie(1 << 5);
 }
 
 pub unsafe fn handle() {

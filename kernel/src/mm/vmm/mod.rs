@@ -130,5 +130,7 @@ pub unsafe fn translate_user(root_pa: u64, vaddr: u64) -> u64 {
 
 pub mod map;
 pub mod walk;
+pub mod unmap;
 
 pub use map::{map, map_anon, map_one_pub};
+pub use unmap::*;

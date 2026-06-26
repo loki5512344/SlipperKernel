@@ -7,6 +7,8 @@ pub const SYS_READ: u64 = 2;
 pub const SYS_EXIT: u64 = 3;
 pub const SYS_YIELD: u64 = 4;
 pub const SYS_GETPID: u64 = 5;
+pub const SYS_BRK: u64 = 6;
+pub const SYS_MMAP: u64 = 7;
 pub const SYS_OPEN: u64 = 8;
 pub const SYS_CLOSE: u64 = 9;
 pub const SYS_LSEEK: u64 = 10;
@@ -119,6 +121,22 @@ pub const SYS_CHAN_RECV: u64 = 30;
 pub const SYS_CHAN_CLOSE: u64 = 31;
 pub const SYS_CHAN_CREATE_NAMED: u64 = 32;
 pub const SYS_CHAN_OPEN: u64 = 33;
+pub const SYS_MUNMAP: u64 = 34;
+pub const SYS_DUP: u64 = 35;
+pub const SYS_PIPE: u64 = 36;
+pub const SYS_UNLINK: u64 = 37;
+pub const SYS_RENAME: u64 = 38;
+pub const SYS_CHDIR: u64 = 39;
+pub const SYS_GETCWD: u64 = 40;
+pub const SYS_TRUNCATE: u64 = 41;
+pub const SYS_ACCESS: u64 = 42;
+pub const SYS_GETTIMEOFDAY: u64 = 43;
+pub const SYS_FCNTL: u64 = 44;
+pub const SYS_GETUID: u64 = 45;
+pub const SYS_GETGID: u64 = 46;
+pub const SYS_UTIMENS: u64 = 47;
+pub const SYS_UNAME: u64 = 48;
+pub const SYS_NANOSLEEP: u64 = 49;
 
 pub const SYS_WRITE_FD: u64 = 24;
 pub const SYS_CREATE: u64 = 25;
@@ -191,5 +209,96 @@ pub unsafe fn chan_create_named(name: *const u8) -> i64 {
 pub unsafe fn chan_open(name: *const u8) -> i64 {
     let ret: i64;
     asm!("ecall", in("a7") SYS_CHAN_OPEN, in("a0") name as usize, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn brk(addr: u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_BRK, in("a0") addr, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn mmap(addr: u64, length: u64, prot: u64, flags: u64, fd: u64, offset: u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_MMAP, in("a0") addr, in("a1") length, in("a2") prot, in("a3") flags, in("a4") fd, in("a5") offset, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn munmap(addr: u64, length: u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_MUNMAP, in("a0") addr, in("a1") length, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn dup(old_fd: u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_DUP, in("a0") old_fd, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn pipe(pipefd: *mut u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_PIPE, in("a0") pipefd as usize, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn unlink(path: *const u8) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_UNLINK, in("a0") path as usize, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn rename(old_path: *const u8, new_path: *const u8) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_RENAME, in("a0") old_path as usize, in("a1") new_path as usize, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn chdir(path: *const u8) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_CHDIR, in("a0") path as usize, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn getcwd(buf: *mut u8, len: u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_GETCWD, in("a0") buf as usize, in("a1") len, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn getuid() -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_GETUID, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn getgid() -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_GETGID, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn uname(buf: *mut u8) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_UNAME, in("a0") buf as usize, lateout("a0") ret);
+    ret
+}
+
+#[inline]
+pub unsafe fn gettimeofday(tv: *mut u64) -> i64 {
+    let ret: i64;
+    asm!("ecall", in("a7") SYS_GETTIMEOFDAY, in("a0") tv as usize, lateout("a0") ret);
     ret
 }

@@ -38,6 +38,9 @@ pub struct Proc {
     pub entry: u64,
     pub ustack: u64,
     pub heap_brk: u64,
+    pub mmap_brk: u64,
+    pub cwd: [u8; 256],
+    pub cwd_len: u16,
     pub uid: u32,
     pub gid: u32,
     pub tf: TrapFrame,
@@ -69,6 +72,9 @@ impl Proc {
             entry: 0,
             ustack: 0,
             heap_brk: 0,
+            mmap_brk: 0x3000_0000,
+            cwd: [0; 256],
+            cwd_len: 0,
             uid: 0,
             gid: 0,
             tf: TrapFrame::zero(),
@@ -93,25 +99,16 @@ impl Proc {
 /// Head of the process linked list.
 pub(super) static mut G_PROC_LIST: *mut Proc = ptr::null_mut();
 
-/// Maximum number of harts supported.
 pub const MAX_HARTS: usize = crate::arch::smp::MAX_HARTS;
 
-/// Per-hart currently running process. `null` when the hart is idle.
 pub(super) static mut G_HART_CURRENT: [*mut Proc; MAX_HARTS] = [ptr::null_mut(); MAX_HARTS];
 
-/// Per-hart saved trap frame for the idle loop. When a secondary hart
-/// switches from idle to a user process, the idle trap frame is saved here
-/// so it can be restored when the process exits and no replacement is found.
 pub(super) static mut G_HART_IDLE_TF: [TrapFrame; MAX_HARTS] = [TrapFrame::zero(); MAX_HARTS];
 
-/// Legacy single-hart current (always equals G_HART_CURRENT[0]).
-/// Kept for compatibility; prefer `current_for_hart()`.
 pub(super) static mut G_CURRENT: *mut Proc = ptr::null_mut();
 
-/// Next PID to allocate.
 pub(super) static mut G_NEXT_PID: u32 = PROC_PID_INIT;
 
-/// Read the current hart ID from the `tp` register.
 #[inline]
 pub fn hart_id() -> usize {
     let id: usize;
@@ -136,7 +133,6 @@ pub(super) fn alloc_pid() -> u32 {
     }
 }
 
-/// Get the current process pointer for a specific hart.
 pub unsafe fn current_for_hart(hartid: usize) -> *mut Proc {
     if hartid < MAX_HARTS {
         G_HART_CURRENT[hartid]
@@ -145,7 +141,6 @@ pub unsafe fn current_for_hart(hartid: usize) -> *mut Proc {
     }
 }
 
-/// Set the current process pointer for a specific hart.
 pub unsafe fn set_current_for_hart(hartid: usize, p: *mut Proc) {
     if hartid < MAX_HARTS {
         G_HART_CURRENT[hartid] = p;
@@ -153,6 +148,10 @@ pub unsafe fn set_current_for_hart(hartid: usize, p: *mut Proc) {
             G_CURRENT = p;
         }
     }
+}
+
+pub unsafe fn set_cpu_online(hart: usize, v: bool) {
+    crate::arch::smp::set_cpu_online(hart, v);
 }
 
 pub fn current_pid() -> u32 {
@@ -179,9 +178,35 @@ pub fn current_ring() -> u8 {
     }
 }
 
+pub fn current_opt() -> Option<&'static mut Proc> {
+    unsafe {
+        let p = G_HART_CURRENT[hart_id()];
+        if p.is_null() {
+            None
+        } else {
+            Some(&mut *p)
+        }
+    }
+}
+
 pub unsafe fn current() -> &'static mut Proc {
     let p = G_HART_CURRENT[hart_id()];
     &mut *p
+}
+
+pub unsafe fn set_cwd(path: &[u8]) {
+    let p = current();
+    let n = path.len().min(255);
+    p.cwd[..n].copy_from_slice(&path[..n]);
+    p.cwd[n] = 0;
+    p.cwd_len = n as u16;
+}
+
+pub fn cwd() -> &'static [u8] {
+    unsafe {
+        let p = current();
+        &p.cwd[..p.cwd_len as usize]
+    }
 }
 
 pub unsafe fn by_pid(pid: u32) -> Option<&'static mut Proc> {

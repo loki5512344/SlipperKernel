@@ -1,5 +1,5 @@
 //! Stateful readdir — single active directory cursor (MVP).
-use crate::fs::{onyxfs, procfs};
+use crate::fs::{ipcfs, onyxfs, procfs};
 use onyx_core::errno::{Errno, KResult};
 
 use super::resolve_mount;
@@ -33,6 +33,29 @@ pub unsafe fn readdir(dir_path: &[u8], name_out: *mut u8, name_len: usize) -> KR
                 G_DIR_FS = Fs::Proc;
             }
             match procfs::readdir_entry(G_DIR_CURSOR_IDX, name_out, name_len) {
+                Some(_ino) => {
+                    G_DIR_CURSOR_IDX += 1;
+                    Ok(true)
+                }
+                None => {
+                    G_DIR_ACTIVE = false;
+                    Ok(false)
+                }
+            }
+        }
+        Fs::Ipc => {
+            let ino = if subpath.is_empty() || subpath == b"." {
+                ipcfs::IPCFS_ROOT_INO
+            } else {
+                ipcfs::lookup(subpath)?
+            };
+            if !G_DIR_ACTIVE || G_DIR_CURSOR_INO != ino || G_DIR_FS != Fs::Ipc {
+                G_DIR_CURSOR_INO = ino;
+                G_DIR_CURSOR_IDX = 0;
+                G_DIR_ACTIVE = true;
+                G_DIR_FS = Fs::Ipc;
+            }
+            match ipcfs::readdir_entry(G_DIR_CURSOR_IDX, name_out, name_len) {
                 Some(_ino) => {
                     G_DIR_CURSOR_IDX += 1;
                     Ok(true)

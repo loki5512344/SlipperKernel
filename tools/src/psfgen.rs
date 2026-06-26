@@ -162,10 +162,20 @@ static ALPHA_LOWER: [[u8; 16]; 26] = [
     [0b00000000, 0b00000000, 0b00000000, 0b01111110, 0b01000110, 0b00001100, 0b00011000, 0b00011000, 0b00110000, 0b01100010, 0b01100110, 0b01111110, 0b00000000, 0b00000000, 0b00000000, 0b00000000],
 ];
 
+fn generate_unicode_table() -> Vec<u8> {
+    let mut table = Vec::new();
+    for cp in 0..GLYPHS {
+        table.extend_from_slice(&(cp as u16).to_le_bytes());
+        table.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    }
+    table
+}
+
 fn generate_psf1() -> Vec<u8> {
-    let charsize = GLYPH_H as u32; // 16 bytes per glyph
-    let mode: u8 = 0x00; // 256 glyphs, no unicode table
-    let total_size = 4 + GLYPHS * GLYPH_H;
+    let charsize = GLYPH_H as u32;
+    let unicode_table = generate_unicode_table();
+    let mode: u8 = 0x02;
+    let total_size = 4 + GLYPHS * GLYPH_H + unicode_table.len();
     let mut buf = Vec::with_capacity(total_size);
 
     buf.extend_from_slice(&PSF1_MAGIC.to_le_bytes());
@@ -178,6 +188,7 @@ fn generate_psf1() -> Vec<u8> {
         buf.extend_from_slice(g);
     }
 
+    buf.extend_from_slice(&unicode_table);
     buf
 }
 

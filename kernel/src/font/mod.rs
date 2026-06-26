@@ -20,6 +20,8 @@ pub struct PcfFont {
     pub charsize: u32,
     pub num_glyphs: u32,
     pub glyphs: *const u8,
+    pub unicode: *const u8,
+    pub unicode_len: usize,
 }
 
 // ── Unicode → glyph mapping table ──────────────────────────────────────
@@ -99,12 +101,20 @@ unsafe fn init_psf1(data: &[u8]) -> KResult<()> {
     if data.len() < 4 + glyph_bytes {
         return Err(Errno::Io);
     }
+    let (unicode_ptr, unicode_len) = if mode & 0x02 != 0 && data.len() > 4 + glyph_bytes {
+        let ustart = 4 + glyph_bytes;
+        (data.as_ptr().add(ustart), data.len() - ustart)
+    } else {
+        (core::ptr::null(), 0)
+    };
     G_FONT = Some(PcfFont {
         width: 8,
         height: charsize,
         charsize,
         num_glyphs,
         glyphs: data.as_ptr().add(4),
+        unicode: unicode_ptr,
+        unicode_len,
     });
 
     // Parse PSF1 Unicode table if present (mode bit 1)
@@ -170,15 +180,23 @@ unsafe fn init_psf2(data: &[u8]) -> KResult<()> {
     let height = u32::from_le_bytes(data[24..28].try_into().unwrap());
     let width = u32::from_le_bytes(data[28..32].try_into().unwrap());
     let glyph_bytes = (num_glyphs as usize) * (charsize as usize);
-    if data.len() < hdr_size + glyph_bytes {
+    let end = hdr_size + glyph_bytes;
+    if data.len() < end {
         return Err(Errno::Io);
     }
+    let (unicode_ptr, unicode_len) = if data.len() > end {
+        (data.as_ptr().add(end), data.len() - end)
+    } else {
+        (core::ptr::null(), 0)
+    };
     G_FONT = Some(PcfFont {
         width,
         height,
         charsize,
         num_glyphs,
         glyphs: data.as_ptr().add(hdr_size),
+        unicode: unicode_ptr,
+        unicode_len,
     });
 
     // Parse PSF2 Unicode table if present
@@ -305,24 +323,14 @@ pub fn glyph_bitmap(c: u8) -> &'static [u8; FONT_GLYPH_BYTES] {
     }
 }
 
-/// Glyph data returned by `glyph_bitmap_unicode` — supports variable charsize.
 #[derive(Clone, Copy)]
 pub struct GlyphData {
-    /// Pointer to the first byte of the glyph bitmap.
     pub data: *const u8,
-    /// Bytes per glyph (rows × bytes_per_row).
     pub charsize: u32,
-    /// Glyph width in pixels.
     pub width: u32,
-    /// Glyph height in pixels (rows).
     pub height: u32,
 }
 
-/// Get glyph bitmap data for a Unicode codepoint.
-///
-/// Returns `GlyphData` with a raw pointer and the actual charsize, so
-/// callers can handle PSF2 fonts where charsize != 16.
-/// Falls back to '?' (0x3F) if the codepoint is not in the font.
 pub fn glyph_bitmap_unicode(cp: u32) -> GlyphData {
     if let Some(idx) = glyph_for_unicode(cp) {
         unsafe {
@@ -338,7 +346,6 @@ pub fn glyph_bitmap_unicode(cp: u32) -> GlyphData {
             }
         }
     }
-    // Fallback to '?'
     unsafe {
         if let Some(f) = G_FONT {
             let off = (b'?' as usize).min(f.num_glyphs as usize - 1) * f.charsize as usize;
@@ -357,6 +364,34 @@ pub fn glyph_bitmap_unicode(cp: u32) -> GlyphData {
             }
         }
     }
+}
+
+pub fn glyph_for_cp(cp: u32) -> Option<u8> {
+    unsafe {
+        let f = G_FONT?;
+        if f.unicode.is_null() || f.unicode_len == 0 {
+            return (cp as u8 <= 0x7F || (f.num_glyphs > 256 && cp < 256)).then(|| cp as u8);
+        }
+        let mut pos = 0usize;
+        let mut glyph: u32 = 0;
+        while pos + 1 < f.unicode_len && glyph < f.num_glyphs {
+            let val = u16::from_le_bytes([*f.unicode.add(pos), *f.unicode.add(pos + 1)]);
+            pos += 2;
+            if val == 0xFFFF {
+                glyph += 1;
+            } else if val == 0xFFFE {
+            } else if val as u32 == cp {
+                return Some(glyph as u8);
+            }
+        }
+        None
+    }
+}
+
+pub fn glyph_or_default(cp: u32) -> u8 {
+    glyph_for_cp(cp).unwrap_or_else(|| {
+        if cp < 256 { cp as u8 } else { b'?' }
+    })
 }
 
 static BLANK_GLYPH: [u8; FONT_GLYPH_BYTES] = [0u8; FONT_GLYPH_BYTES];

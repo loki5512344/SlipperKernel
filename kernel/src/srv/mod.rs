@@ -1,3 +1,4 @@
+pub mod kdump;
 pub mod klog;
 pub mod main;
 pub mod syscall_dispatch;

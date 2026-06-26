@@ -7,14 +7,24 @@ use crate::srv::timer;
 use crate::syscall::handler;
 
 pub unsafe fn init() {
-    crate::arch::csr::write_stvec(crate::arch::asm::trap_entry as *const () as usize as u64);
-    let stack_top = &crate::arch::__stack_top as *const u8 as usize;
-    crate::arch::csr::write_sscratch(stack_top as u64);
+    init_hart();
     crate::kinf!(
         "trap",
         "stvec=%p",
         onyx_core::fmt::Arg::from(crate::arch::asm::trap_entry as *const () as usize as u64)
     );
+}
+
+pub unsafe fn init_hart() {
+    crate::arch::csr::write_stvec(crate::arch::asm::trap_entry as *const () as usize as u64);
+    let hartid = crate::arch::smp::current_hart();
+    let stack_top = if hartid == 0 {
+        &crate::arch::__stack_top as *const u8 as usize
+    } else {
+        let b = &raw const crate::arch::smp::G_SEC_STACKS as *const u8 as usize;
+        b + (hartid + 1) * crate::arch::smp::SEC_STACK_SIZE
+    };
+    crate::arch::csr::write_sscratch(stack_top as u64);
 }
 
 pub unsafe fn handle(tf: &mut TrapFrame) {

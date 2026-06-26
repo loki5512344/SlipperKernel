@@ -10,7 +10,7 @@ use crate::proc;
 use crate::syscall::abi::*;
 use onyx_core::errno::Errno;
 
-use super::{fs_sys, fs_sys2, ipc_sys, proc_sys, ring_sys, snap_sys};
+use super::{fs_sys, fs_sys2, fs_sys3, ipc_sys, proc_sys, ring_sys, snap_sys};
 
 const USER_BASE: u64 = 0x10000;
 const USER_TOP: u64 = 0x4000_0000;
@@ -41,7 +41,10 @@ fn syscall_allowed(nr: u64, ring: u8) -> bool {
         SYS_write | SYS_read | SYS_exit | SYS_yield | SYS_getpid | SYS_sbrk | SYS_open
         | SYS_close | SYS_lseek | SYS_stat | SYS_exec | SYS_readdir | SYS_getring
         | SYS_dropring | SYS_sigmask | SYS_write_fd | SYS_chan_connect | SYS_chan_send
-        | SYS_chan_recv | SYS_chan_close => true,
+        | SYS_chan_recv | SYS_chan_close | SYS_chan_open
+        | SYS_brk | SYS_mmap | SYS_munmap | SYS_dup | SYS_chdir | SYS_getcwd
+        | SYS_access | SYS_gettimeofday | SYS_fcntl | SYS_getuid | SYS_getgid
+        | SYS_uname | SYS_nanosleep => true,
         // Root-only (ring 0 or 1):
         SYS_spawn
         | SYS_wait
@@ -52,9 +55,8 @@ fn syscall_allowed(nr: u64, ring: u8) -> bool {
         | SYS_create
         | SYS_mkdir
         | SYS_chan_create
-        | SYS_chan_create_named => ring <= proc::PROC_RING_ROOT,
-        // Stubbed:
-        SYS_brk | SYS_mmap => false,
+        | SYS_chan_create_named
+        | SYS_unlink | SYS_rename | SYS_truncate | SYS_utimens | SYS_pipe => ring <= proc::PROC_RING_ROOT,
         _ => false,
     }
 }
@@ -64,7 +66,6 @@ pub unsafe fn handle(tf: &mut TrapFrame) -> i64 {
     let a0 = tf.a0;
     let a1 = tf.a1;
     let a2 = tf.a2;
-
     let cur_ring = proc::current_ring();
 
     // ACL check.
@@ -104,7 +105,24 @@ pub unsafe fn handle(tf: &mut TrapFrame) -> i64 {
         SYS_chan_send => ipc_sys::sys_chan_send(tf, a0 as u32, a1, a2),
         SYS_chan_recv => ipc_sys::sys_chan_recv(tf, a0 as u32, a1, a2),
         SYS_chan_close => ipc_sys::sys_chan_close(a0 as u32),
-        SYS_brk | SYS_mmap => Errno::NoSys.as_i64(),
+        SYS_brk => fs_sys3::sys_brk(a0),
+        SYS_mmap => fs_sys3::sys_mmap(a0, a1, a2, tf.a3, tf.a4, tf.a5),
+        SYS_munmap => fs_sys3::sys_munmap(a0, a1),
+        SYS_dup => fs_sys3::sys_dup(a0),
+        SYS_pipe => fs_sys3::sys_pipe(a0),
+        SYS_unlink => fs_sys3::sys_unlink(a0),
+        SYS_rename => fs_sys3::sys_rename(a0, a1),
+        SYS_chdir => fs_sys3::sys_chdir(a0),
+        SYS_getcwd => fs_sys3::sys_getcwd(a0, a1),
+        SYS_truncate => fs_sys3::sys_truncate(a0),
+        SYS_access => fs_sys3::sys_access(a0, a1),
+        SYS_gettimeofday => fs_sys3::sys_gettimeofday(a0),
+        SYS_fcntl => fs_sys3::sys_fcntl(a0, a1, a2),
+        SYS_getuid => fs_sys3::sys_getuid(),
+        SYS_getgid => fs_sys3::sys_getgid(),
+        SYS_utimens => fs_sys3::sys_utimens(a0, a1),
+        SYS_uname => fs_sys3::sys_uname(a0),
+        SYS_nanosleep => fs_sys3::sys_nanosleep(a0, a1),
         _ => Errno::NoSys.as_i64(),
     }
 }

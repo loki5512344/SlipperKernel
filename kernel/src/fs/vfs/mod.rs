@@ -255,10 +255,20 @@ pub(super) unsafe fn fd_clear(idx: usize) {
     }
 }
 
+pub unsafe fn rename(old_path: &[u8], new_path: &[u8]) -> KResult<()> {
+    crate::fs::onyxfs::rename(old_path, new_path)
+}
+
 pub mod create;
 pub mod dir;
 pub mod file;
+pub mod truncate;
+pub mod unlink;
+pub mod utimens;
 
 pub use create::*;
 pub use dir::*;
 pub use file::*;
+pub use truncate::*;
+pub use unlink::*;
+pub use utimens::*;

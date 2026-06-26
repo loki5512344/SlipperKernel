@@ -18,8 +18,10 @@ pub mod mkdir;
 pub mod mount;
 pub mod read;
 pub mod readdir;
+pub mod rename;
 pub mod snapshot;
 pub mod snapshot_io;
+pub mod unlink;
 pub mod write;
 
 pub use compress::*;
@@ -30,8 +32,10 @@ pub use mkdir::*;
 pub use mount::*;
 pub use read::*;
 pub use readdir::*;
+pub use rename::*;
 pub use snapshot::*;
 pub use snapshot_io::*;
+pub use unlink::*;
 pub use write::*;
 
 use crate::drivers::virtio_req;

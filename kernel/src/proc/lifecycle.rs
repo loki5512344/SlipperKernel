@@ -23,6 +23,7 @@ pub(super) unsafe fn alloc_proc() -> KResult<*mut Proc> {
     (*p).entry = 0;
     (*p).ustack = 0;
     (*p).heap_brk = 0;
+    (*p).mmap_brk = 0x3000_0000;
     (*p).uid = 0;
     (*p).gid = 0;
     (*p).tf = TrapFrame::zero();

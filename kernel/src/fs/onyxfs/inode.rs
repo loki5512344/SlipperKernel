@@ -120,6 +120,32 @@ pub unsafe fn update_mtime(ino: u32) -> KResult<()> {
     write_inode(ino, &inode)
 }
 
+pub unsafe fn set_timestamps(ino: u32, mtime: u64, atime: u64) -> KResult<()> {
+    if *(&raw const G_VERSION) == ONYFS_V1 {
+        return Err(Errno::NoSys);
+    }
+    let mut inode = OnyfsInode {
+        mode: 0,
+        size: 0,
+        uid: 0,
+        gid: 0,
+        nlink: 0,
+        blocks: [0; ONYFS_DIRECT_BLKS],
+        indirect: 0,
+        double_indirect: 0,
+        crtime: 0,
+        mtime: 0,
+        atime: 0,
+        ctime: 0,
+        flags: 0,
+        reserved: 0,
+    };
+    read_inode(ino, &mut inode)?;
+    inode.mtime = mtime;
+    inode.atime = atime;
+    write_inode(ino, &inode)
+}
+
 pub unsafe fn stat(ino: u32, out: &mut OnyfsStat) -> KResult<()> {
     let mut inode = OnyfsInode {
         mode: 0,
