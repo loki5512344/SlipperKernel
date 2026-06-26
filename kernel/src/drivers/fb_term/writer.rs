@@ -1,8 +1,4 @@
-//! FbWriter — terminal emulator over the framebuffer.
-//!
-//! Manages a text cursor (col/row), handles newline/scroll, and prints with
-//! configurable foreground/background colors. Accessed via `fb::writer()`.
-use super::fb;
+use crate::drivers::fb;
 use crate::font;
 
 pub struct FbWriter {
@@ -61,17 +57,11 @@ impl FbWriter {
         }
     }
 
-    /// Write a Unicode codepoint to the terminal.
-    ///
-    /// Uses `fb::draw_unicode_char` which consults the font's Unicode
-    /// table to find the correct glyph. Falls back to '?' if the
-    /// codepoint is not mapped.
     pub fn put_unicode(&mut self, cp: u32) {
         let fw = font::font_width();
         let fh = font::font_height();
         let max_col = fb::FB_WIDTH / fw;
         let max_row = fb::FB_HEIGHT / fh;
-        // For ASCII control characters, delegate to putc
         if cp < 0x20 {
             self.putc(cp as u8);
             return;
@@ -94,22 +84,16 @@ impl FbWriter {
         }
     }
 
-    /// Write a UTF-8 string using Unicode-aware glyph lookup.
-    ///
-    /// Decodes UTF-8 sequences and renders each codepoint via
-    /// `put_unicode`, supporting non-ASCII characters like Cyrillic.
     pub fn puts_unicode(&mut self, s: &str) {
         let bytes = s.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
             let b = bytes[i];
-            // ASCII fast-path
             if b < 0x80 {
                 self.putc(b);
                 i += 1;
                 continue;
             }
-            // Decode UTF-8
             let cp;
             if b < 0xE0 {
                 if i + 1 >= bytes.len() { break; }
@@ -131,43 +115,5 @@ impl FbWriter {
             }
             self.put_unicode(cp);
         }
-    }
-}
-
-static mut G_WRITER: FbWriter = FbWriter::new();
-
-pub fn writer() -> Option<&'static mut FbWriter> {
-    unsafe {
-        if fb::enabled() {
-            Some(&mut G_WRITER)
-        } else {
-            None
-        }
-    }
-}
-
-pub fn write_str(s: &str) {
-    if let Some(w) = writer() {
-        w.puts(s);
-    }
-}
-
-pub fn write_char(c: u8) {
-    if let Some(w) = writer() {
-        w.putc(c);
-    }
-}
-
-/// Write a Unicode codepoint to the framebuffer terminal.
-pub fn write_unicode(cp: u32) {
-    if let Some(w) = writer() {
-        w.put_unicode(cp);
-    }
-}
-
-/// Write a UTF-8 string to the framebuffer terminal using Unicode-aware rendering.
-pub fn write_unicode_str(s: &str) {
-    if let Some(w) = writer() {
-        w.puts_unicode(s);
     }
 }
